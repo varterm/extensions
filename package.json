@@ -1,0 +1,171 @@
+{
+  "name": "varterm-cursor",
+  "displayName": "Varterm TTS",
+  "description": "Varterm TTS for Cursor and VS Code. Read editor, selection, and clipboard text aloud with natural voices.",
+  "version": "0.1.13",
+  "publisher": "varterm",
+  "icon": "assets/icon.png",
+  "galleryBanner": {
+    "color": "#0a0a0b",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/varterm/varterm-vscode.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vartermCursor.connect",
+        "title": "Varterm: Connect"
+      },
+      {
+        "command": "vartermCursor.selectReadAloudVoice",
+        "title": "Varterm: Select Read-Aloud Voice"
+      },
+      {
+        "command": "vartermCursor.setElevenLabsApiKey",
+        "title": "Varterm: Set ElevenLabs API Key"
+      },
+      {
+        "command": "vartermCursor.readEditorAloud",
+        "title": "Varterm: Read Editor/Selection Aloud"
+      },
+      {
+        "command": "vartermCursor.readClipboardAloud",
+        "title": "Varterm: Read Clipboard Aloud"
+      },
+      {
+        "command": "vartermCursor.openSettings",
+        "title": "Varterm: Open Settings"
+      },
+      {
+        "command": "vartermCursor.clearAudioCache",
+        "title": "Varterm: Clear Audio Cache"
+      }
+    ],
+    "configuration": {
+      "title": "Varterm Cursor",
+      "properties": {
+        "vartermCursor.requestTimeoutMs": {
+          "type": "number",
+          "default": 90000,
+          "minimum": 5000,
+          "maximum": 180000,
+          "description": "HTTP timeout per request in milliseconds. Increase for very long passages."
+        },
+        "vartermCursor.requestRetries": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Retry count for transient API failures (429/5xx/timeouts)."
+        },
+        "vartermCursor.maxTotalTextChars": {
+          "type": "number",
+          "default": 1000000,
+          "minimum": 10000,
+          "maximum": 5000000,
+          "description": "Maximum combined characters processed in a single operation."
+        },
+        "vartermCursor.chunkSize": {
+          "type": "number",
+          "default": 1800,
+          "minimum": 400,
+          "maximum": 5000,
+          "description": "Chunk size used when processing large text."
+        },
+        "vartermCursor.chunkOverlap": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "maximum": 2000,
+          "description": "Chunk overlap used when processing large text."
+        },
+        "vartermCursor.askMaxChunks": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Advanced compatibility setting for context chunk retrieval."
+        },
+        "vartermCursor.askMaxContextChars": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "maximum": 50000,
+          "description": "Advanced compatibility setting for max context characters."
+        },
+        "vartermCursor.autoReadAnswersAloud": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically synthesize and play generated text responses."
+        },
+        "vartermCursor.readAloudVoice": {
+          "type": "string",
+          "default": "en-US-AriaNeural",
+          "description": "Voice ID used with /api/edge-tts for read-aloud playback."
+        },
+        "vartermCursor.readAloudRate": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.5,
+          "maximum": 2,
+          "description": "Playback speed for read-aloud synthesis."
+        },
+        "vartermCursor.readAloudProvider": {
+          "type": "string",
+          "default": "edge",
+          "enum": ["edge", "premium"],
+          "description": "TTS provider for read aloud. Edge supports longer chunks, premium uses /api/tts voices."
+        },
+        "vartermCursor.elevenLabsApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional ElevenLabs API key override sent to /api/tts. Prefer using the command 'Varterm: Set ElevenLabs API Key' to store it securely."
+        },
+        "vartermCursor.maxCachedAudioFiles": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of generated audio files to keep in local extension storage."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "check": "tsc --noEmit -p .",
+    "package": "npm run build && npx @vscode/vsce package"
+  },
+  "keywords": [
+    "speech-synthesis",
+    "voice-reader",
+    "accessibility",
+    "agent-readout",
+    "agent",
+    "cursor",
+    "vscode",
+    "tts",
+    "text-to-speech",
+    "read-aloud",
+    "audio"
+  ],
+  "author": "Varterm",
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.105.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^6.0.3"
+  }
+}
