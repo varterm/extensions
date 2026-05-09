@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { createTtsHttpClient } from '@varterm/tts-client';
 
 const SECRET_TOKEN_KEY = 'vartermCursor.apiToken';
 const SECRET_ELEVENLABS_KEY = 'vartermCursor.elevenLabsApiKey';
@@ -76,17 +77,6 @@ type VoiceOption = {
   provider: 'edge' | 'premium';
 };
 
-class HttpError extends Error {
-  status: number;
-  retryAfterMs?: number;
-
-  constructor(message: string, status: number, retryAfterMs?: number) {
-    super(message);
-    this.status = status;
-    this.retryAfterMs = retryAfterMs;
-  }
-}
-
 function getBaseUrl(context: vscode.ExtensionContext): string {
   return context.globalState.get<string>(BASE_URL_KEY) || 'https://www.varterm.com';
 }
@@ -149,82 +139,24 @@ async function getRequestHeaders(
   return headers;
 }
 
+function createHttpClient(context: vscode.ExtensionContext, options?: { retries?: number; timeoutMs?: number }) {
+  const settings = getSettings();
+  return createTtsHttpClient({
+    baseUrl: getBaseUrl(context),
+    retries: options?.retries ?? settings.requestRetries,
+    timeoutMs: options?.timeoutMs ?? settings.requestTimeoutMs,
+    getHeaders: (includeJsonContentType) => getRequestHeaders(context, includeJsonContentType),
+  });
+}
+
 async function postJson<T>(
   context: vscode.ExtensionContext,
   path: string,
   payload: unknown,
   options?: { retries?: number; timeoutMs?: number; cancellationToken?: vscode.CancellationToken }
 ): Promise<T> {
-  const baseUrl = getBaseUrl(context).replace(/\/$/, '');
-  const settings = getSettings();
-  const retries = options?.retries ?? settings.requestRetries;
-  const timeoutMs = options?.timeoutMs ?? settings.requestTimeoutMs;
-  const cancellationToken = options?.cancellationToken;
-
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const timeoutController = new AbortController();
-    const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
-    const cancelSubscription = cancellationToken?.onCancellationRequested(() => {
-      timeoutController.abort();
-    });
-
-    try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: await getRequestHeaders(context, true),
-        body: JSON.stringify(payload),
-        signal: timeoutController.signal,
-      });
-
-      const textBody = await response.text();
-      let parsedBody: unknown = {};
-      try {
-        parsedBody = textBody ? (JSON.parse(textBody) as unknown) : {};
-      } catch {
-        parsedBody = { error: textBody };
-      }
-
-      if (!response.ok) {
-        const retryAfterHeader = response.headers.get('retry-after');
-        const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
-        const retryAfterMs = Number.isFinite(retryAfterSec) ? retryAfterSec * 1000 : undefined;
-        const message =
-          (parsedBody as { error?: string })?.error ||
-          `Request failed with status ${response.status}`;
-        const err = new HttpError(message, response.status, retryAfterMs);
-        const shouldRetry =
-          attempt < retries && (response.status === 429 || response.status >= 500);
-        if (!shouldRetry) {
-          throw err;
-        }
-
-        const waitMs = err.retryAfterMs ?? Math.min(1500 * 2 ** attempt, 6000);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
-        continue;
-      }
-
-      return parsedBody as T;
-    } catch (error) {
-      if (cancellationToken?.isCancellationRequested) {
-        throw new Error('Operation cancelled');
-      }
-
-      const isTimeout = error instanceof DOMException && error.name === 'AbortError';
-      if (isTimeout && attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * 2 ** attempt, 4000)));
-        continue;
-      }
-      if (isTimeout) {
-        throw new Error(`Request timed out after ${timeoutMs}ms`);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeoutHandle);
-      cancelSubscription?.dispose();
-    }
-  }
-
-  throw new Error('Request failed');
+  const client = createHttpClient(context, options);
+  return client.postJson<T>(path, payload, options);
 }
 
 async function postBinary(
@@ -233,79 +165,8 @@ async function postBinary(
   payload: unknown,
   options?: { retries?: number; timeoutMs?: number; cancellationToken?: vscode.CancellationToken }
 ): Promise<Uint8Array> {
-  const baseUrl = getBaseUrl(context).replace(/\/$/, '');
-  const settings = getSettings();
-  const retries = options?.retries ?? settings.requestRetries;
-  const timeoutMs = options?.timeoutMs ?? settings.requestTimeoutMs;
-  const cancellationToken = options?.cancellationToken;
-
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const timeoutController = new AbortController();
-    const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
-    const cancelSubscription = cancellationToken?.onCancellationRequested(() => {
-      timeoutController.abort();
-    });
-
-    try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: await getRequestHeaders(context, true),
-        body: JSON.stringify(payload),
-        signal: timeoutController.signal,
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        let errorMessage = text;
-        try {
-          const parsed = text ? JSON.parse(text) : {};
-          errorMessage = parsed.error || parsed.message || text;
-        } catch {
-          // Use raw text fallback.
-        }
-
-        const retryAfterHeader = response.headers.get('retry-after');
-        const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
-        const retryAfterMs = Number.isFinite(retryAfterSec) ? retryAfterSec * 1000 : undefined;
-        const err = new HttpError(
-          errorMessage || `Request failed with status ${response.status}`,
-          response.status,
-          retryAfterMs
-        );
-
-        const shouldRetry =
-          attempt < retries && (response.status === 429 || response.status >= 500);
-        if (!shouldRetry) {
-          throw err;
-        }
-
-        const waitMs = err.retryAfterMs ?? Math.min(1500 * 2 ** attempt, 6000);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
-        continue;
-      }
-
-      const buffer = await response.arrayBuffer();
-      return new Uint8Array(buffer);
-    } catch (error) {
-      if (cancellationToken?.isCancellationRequested) {
-        throw new Error('Operation cancelled');
-      }
-      const isTimeout = error instanceof DOMException && error.name === 'AbortError';
-      if (isTimeout && attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * 2 ** attempt, 4000)));
-        continue;
-      }
-      if (isTimeout) {
-        throw new Error(`Request timed out after ${timeoutMs}ms`);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeoutHandle);
-      cancelSubscription?.dispose();
-    }
-  }
-
-  throw new Error('Request failed');
+  const client = createHttpClient(context, options);
+  return client.postBinary(path, payload, options);
 }
 
 async function getJson<T>(
@@ -313,53 +174,8 @@ async function getJson<T>(
   path: string,
   options?: { retries?: number; timeoutMs?: number }
 ): Promise<T> {
-  const baseUrl = getBaseUrl(context).replace(/\/$/, '');
-  const settings = getSettings();
-  const retries = options?.retries ?? settings.requestRetries;
-  const timeoutMs = options?.timeoutMs ?? settings.requestTimeoutMs;
-
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const timeoutController = new AbortController();
-    const timeoutHandle = setTimeout(() => timeoutController.abort(), timeoutMs);
-    try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'GET',
-        headers: await getRequestHeaders(context, false),
-        signal: timeoutController.signal,
-      });
-
-      const textBody = await response.text();
-      const parsedBody = textBody ? (JSON.parse(textBody) as unknown) : {};
-
-      if (!response.ok) {
-        const message =
-          (parsedBody as { error?: string })?.error ||
-          `Request failed with status ${response.status}`;
-        const shouldRetry =
-          attempt < retries && (response.status === 429 || response.status >= 500);
-        if (!shouldRetry) {
-          throw new Error(message);
-        }
-        await new Promise((resolve) => setTimeout(resolve, Math.min(1500 * 2 ** attempt, 6000)));
-        continue;
-      }
-      return parsedBody as T;
-    } catch (error) {
-      const isTimeout = error instanceof DOMException && error.name === 'AbortError';
-      if (isTimeout && attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * 2 ** attempt, 4000)));
-        continue;
-      }
-      if (isTimeout) {
-        throw new Error(`Request timed out after ${timeoutMs}ms`);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeoutHandle);
-    }
-  }
-
-  throw new Error('Request failed');
+  const client = createHttpClient(context, options);
+  return client.getJson<T>(path, options);
 }
 
 async function connect(context: vscode.ExtensionContext): Promise<void> {

@@ -1,3 +1,7 @@
 node_modules
 dist
 *.vsix
+extensions/vscode/node_modules
+extensions/vscode/dist
+extensions/chrome/dist
+extensions/chrome/*.zip

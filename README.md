@@ -1,42 +1,33 @@
-# Varterm Cursor Extension
+# Varterm Extensions
 
-Convert long-form text to natural speech in Cursor/VS Code, with markdown cleanup for selected text, editor content, clipboard, and agent output. Free to use with no login required.
+Source code for Varterm browser and editor extensions.
 
-## Commands
+## Repository Layout
 
-- `Varterm: Connect` - configure base URL and optional bearer token.
-- `Varterm: Set ElevenLabs API Key` - store/clear ElevenLabs key in secure extension storage.
-- `Varterm: Select Read-Aloud Voice` - pick from available Edge/Premium voices.
-- `Varterm: Read Editor/Selection Aloud` - synthesize active selection (or full editor text) and play audio.
-- `Varterm: Read Clipboard Aloud` - speak copied text, useful for agent/chat output.
-- `Varterm: Open Settings` - open all `vartermCursor.*` settings.
-- `Varterm: Clear Audio Cache` - remove locally cached generated MP3 files.
+- `extensions/chrome` - Chrome extension source and packaging script.
+- `extensions/vscode` - VS Code/Cursor extension source and packaging script.
+- `packages/tts-client` - shared API client used by extension surfaces.
 
-Player notes:
-- The player opens in a split panel.
-- Playback speed is controlled via the audio player's built-in controls.
+## Build and Package
 
-## Settings
-
-You can tune behavior in Settings under `vartermCursor.*`:
-
-- `vartermCursor.requestTimeoutMs`
-- `vartermCursor.requestRetries`
-- `vartermCursor.readAloudVoice`
-- `vartermCursor.readAloudRate`
-- `vartermCursor.readAloudProvider`
-- `vartermCursor.elevenLabsApiKey` (optional plain-text fallback; secure storage command is preferred)
-- `vartermCursor.maxCachedAudioFiles`
-
-## Development
+### Chrome Extension
 
 ```bash
-npm install
-npm run build
+cd extensions/chrome
+bash package.sh
 ```
 
-Package VSIX:
+### VS Code / Cursor Extension
 
 ```bash
+cd extensions/vscode
+npm ci
 npm run package
 ```
+
+## Releases
+
+GitHub release workflow packages both extension artifacts:
+
+- `extensions/chrome/varterm-tts-chrome.zip`
+- `extensions/vscode/*.vsix`
