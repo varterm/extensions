@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Varterm TTS for Cursor and VS Code. Read editor, selection, and clipboard text aloud with natural voices.",
-  "version": "0.1.13",
+  "version": "0.1.16",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {

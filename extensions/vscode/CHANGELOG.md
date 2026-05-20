@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.16 - 2026-05-20
+
+### Fixed
+- Aligned extension version with GitHub release tags so VSIX download URLs resolve correctly on varterm.com.
+
 ## 0.1.13 - 2026-05-08
 
 ### Fixed
