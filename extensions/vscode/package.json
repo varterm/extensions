@@ -50,6 +50,18 @@
       {
         "command": "vartermCursor.clearAudioCache",
         "title": "Varterm: Clear Audio Cache"
+      },
+      {
+        "command": "vartermCursor.signInAccount",
+        "title": "Varterm: Sign In to Account"
+      },
+      {
+        "command": "vartermCursor.signOutAccount",
+        "title": "Varterm: Sign Out of Account"
+      },
+      {
+        "command": "vartermCursor.saveToLibrary",
+        "title": "Varterm: Save Last Playback to Library"
       }
     ],
     "configuration": {
@@ -146,7 +158,7 @@
     "build": "tsc -p .",
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
-    "package": "npm run build && npx @vscode/vsce package"
+    "package": "npm run build && npx @vscode/vsce package --follow-symlinks"
   },
   "keywords": [
     "speech-synthesis",

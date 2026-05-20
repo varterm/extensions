@@ -25,9 +25,7 @@ jobs:
         run: bash extensions/chrome/package.sh
 
       - name: Package VS Code extension
-        run: |
-          npm install -g @vscode/vsce
-          bash extensions/vscode/package.sh
+        run: bash extensions/vscode/package.sh
 
       - name: Generate release notes
         id: notes
