@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.27 - 2026-08-25
+
+### Added
+- MIT license file in the VS Code / Cursor VSIX for the Open VSX listing.
+
+### Changed
+- Editor extension is on Open VSX. Search **Varterm TTS** in the Extensions panel. GitHub Release `v0.1.27` also ships the `.vsix`.
+- Marketplace icon matches the varterm.com mark.
+
 ## 0.1.16 - 2026-05-20
 
 ### Fixed

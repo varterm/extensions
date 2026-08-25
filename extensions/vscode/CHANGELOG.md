@@ -5,6 +5,9 @@
 ### Added
 - MIT `LICENSE` file in the VSIX so Open VSX can show the license on the listing.
 
+### Changed
+- Varterm TTS is listed on Open VSX. In Cursor or VS Code, open Extensions and search **Varterm TTS** — playback stays in the editor. GitHub Releases still has the `.vsix` if you prefer a manual install.
+
 ## 0.1.26 - 2026-08-25
 
 ### Changed
