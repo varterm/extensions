@@ -1,14 +1,15 @@
 {
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
-  "description": "Varterm TTS for Cursor and VS Code. Read editor, selection, and clipboard text aloud with natural voices.",
-  "version": "0.1.16",
+  "description": "Varterm TTS for VS Code. Read editor, selection, and clipboard text aloud with natural voices.",
+  "version": "0.1.27",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
     "color": "#0a0a0b",
     "theme": "dark"
   },
+  "homepage": "https://varterm.com",
   "repository": {
     "type": "git",
     "url": "https://github.com/varterm/extensions.git"
@@ -44,12 +45,32 @@
         "title": "Varterm: Read Clipboard Aloud"
       },
       {
+        "command": "vartermCursor.openKeyboardShortcuts",
+        "title": "Varterm: Customize Keyboard Shortcuts"
+      },
+      {
         "command": "vartermCursor.openSettings",
         "title": "Varterm: Open Settings"
       },
       {
         "command": "vartermCursor.clearAudioCache",
         "title": "Varterm: Clear Audio Cache"
+      },
+      {
+        "command": "vartermCursor.stopPlayback",
+        "title": "Varterm: Stop Playback"
+      },
+      {
+        "command": "vartermCursor.statusBarAction",
+        "title": "Varterm: Play or Stop from Status Bar"
+      },
+      {
+        "command": "vartermCursor.toggleAutoRead",
+        "title": "Varterm: Toggle Auto-Read"
+      },
+      {
+        "command": "vartermCursor.saveLastAudio",
+        "title": "Varterm: Save Last Audio as MP3"
       },
       {
         "command": "vartermCursor.signInAccount",
@@ -64,8 +85,39 @@
         "title": "Varterm: Save Last Playback to Library"
       }
     ],
+    "keybindings": [
+      {
+        "command": "vartermCursor.readClipboardAloud",
+        "key": "ctrl+shift+y",
+        "mac": "cmd+shift+alt+l"
+      },
+      {
+        "command": "vartermCursor.readEditorAloud",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+alt+r",
+        "when": "editorTextFocus"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "varterm",
+          "title": "Varterm",
+          "icon": "assets/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "varterm": [
+        {
+          "type": "webview",
+          "id": "varterm.player",
+          "name": "Player"
+        }
+      ]
+    },
     "configuration": {
-      "title": "Varterm Cursor",
+      "title": "Varterm",
       "properties": {
         "vartermCursor.requestTimeoutMs": {
           "type": "number",
@@ -121,6 +173,11 @@
           "default": false,
           "description": "Automatically synthesize and play generated text responses."
         },
+        "vartermCursor.autoReadAgentOutput": {
+          "type": "boolean",
+          "default": false,
+          "description": "When on, play new assistant replies aloud when they finish. Also available as the Auto-read status bar toggle."
+        },
         "vartermCursor.readAloudVoice": {
           "type": "string",
           "default": "en-US-AriaNeural",
@@ -146,10 +203,17 @@
         },
         "vartermCursor.maxCachedAudioFiles": {
           "type": "number",
-          "default": 20,
-          "minimum": 1,
+          "default": 8,
+          "minimum": 0,
           "maximum": 200,
-          "description": "Maximum number of generated audio files to keep in local extension storage."
+          "description": "Maximum leftover MP3s kept from older versions. Current playback stays in memory and does not write files."
+        },
+        "vartermCursor.maxCachedAudioAgeHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "maximum": 2160,
+          "description": "Delete cached MP3s older than this many hours. Set 0 to keep files until the count limit is reached."
         }
       }
     }
@@ -164,9 +228,6 @@
     "speech-synthesis",
     "voice-reader",
     "accessibility",
-    "agent-readout",
-    "agent",
-    "cursor",
     "vscode",
     "tts",
     "text-to-speech",

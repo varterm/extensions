@@ -1,5 +1,13 @@
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as vscode from 'vscode';
 import { createTtsHttpClient } from '@varterm/tts-client';
+import { PLAYER_VIEW_ID, VartermPlayerViewProvider } from './player-view';
+import {
+  AUTO_READ_KEY,
+  getAutoReadEnabled,
+  installVartermAgentHook,
+  watchAgentDropFile,
+} from './auto-read';
 
 const SECRET_TOKEN_KEY = 'vartermCursor.apiToken';
 const SECRET_ELEVENLABS_KEY = 'vartermCursor.elevenLabsApiKey';
@@ -13,6 +21,12 @@ const MAX_TOTAL_FILES = 20;
 const DEFAULT_MAX_TOTAL_TEXT_CHARS = 1_000_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_REQUEST_RETRIES = 2;
+const SHORTCUTS_TIP_KEY = 'vartermCursor.shortcutsTipShown';
+
+const SHIPPED_SHORTCUTS = {
+  readClipboardAloud: { mac: 'cmd+shift+alt+l', win: 'ctrl+shift+y' },
+  readEditorAloud: { mac: 'cmd+shift+alt+r', win: 'ctrl+shift+r' },
+} as const;
 
 type IngestResult = {
   sessionId: string;
@@ -47,17 +61,27 @@ type ExtensionSettings = {
   askMaxChunks: number;
   askMaxContextChars: number;
   autoReadAnswersAloud: boolean;
+  autoReadAgentOutput: boolean;
   readAloudVoice: string;
   readAloudRate: number;
   readAloudProvider: 'edge' | 'premium';
   maxCachedAudioFiles: number;
+  maxCachedAudioAgeHours: number;
 };
 
-let audioPanel: vscode.WebviewPanel | undefined;
-let lastEditorColumn: vscode.ViewColumn = vscode.ViewColumn.One;
+type AudioTrack = { title: string; base64: string };
+
 let isGeneratingAudio = false;
-let latestAudioFileUri: vscode.Uri | undefined;
+let generationCts: vscode.CancellationTokenSource | undefined;
+let latestPlayback: { tracks: AudioTrack[]; label: string } | undefined;
+let playerProvider: VartermPlayerViewProvider | undefined;
+let playbackProcess: ChildProcess | undefined;
+let playbackState: 'idle' | 'generating' | 'playing' = 'idle';
+let statusBar: vscode.StatusBarItem | undefined;
+let autoReadStatusBar: vscode.StatusBarItem | undefined;
+let autoReadWatcher: { dispose: () => void } | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
 
 function getOutputChannel(): vscode.OutputChannel {
   if (!outputChannel) {
@@ -68,6 +92,170 @@ function getOutputChannel(): vscode.OutputChannel {
 
 function logInfo(message: string): void {
   getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
+}
+
+function setPlaybackStatus(text: string, state: typeof playbackState = playbackState): void {
+  playbackState = state;
+  if (!statusBar) {
+    return;
+  }
+  statusBar.text = text;
+  statusBar.command = 'vartermCursor.statusBarAction';
+  statusBar.tooltip =
+    state === 'playing'
+      ? 'Click to stop'
+      : state === 'generating'
+        ? 'Click to cancel'
+        : latestPlayback
+          ? 'Click to play last audio again'
+          : 'Click to read clipboard';
+  statusBar.show();
+}
+
+function setIdleStatus(): void {
+  setPlaybackStatus(latestPlayback ? '$(play) Varterm replay' : '$(play) Varterm', 'idle');
+}
+
+function setAutoReadStatus(enabled: boolean): void {
+  if (!autoReadStatusBar) {
+    return;
+  }
+  autoReadStatusBar.text = enabled ? '$(broadcast) Auto-read on' : '$(circle-slash) Auto-read off';
+  autoReadStatusBar.tooltip = enabled
+    ? 'Varterm will read new assistant replies when they finish. Click to turn off.'
+    : 'Click to auto-read new assistant replies when they finish.';
+  autoReadStatusBar.show();
+}
+
+async function setAutoReadEnabled(context: vscode.ExtensionContext, enabled: boolean): Promise<void> {
+  await context.globalState.update(AUTO_READ_KEY, enabled);
+  await vscode.workspace
+    .getConfiguration('vartermCursor')
+    .update('autoReadAgentOutput', enabled, vscode.ConfigurationTarget.Global);
+  setAutoReadStatus(enabled);
+
+  autoReadWatcher?.dispose();
+  autoReadWatcher = undefined;
+
+  if (!enabled) {
+    logInfo('Auto-read off');
+    return;
+  }
+
+  await installVartermAgentHook(context.extensionPath);
+  autoReadWatcher = watchAgentDropFile((text) => {
+    stopHostPlayback();
+    void readTextAloud(context, text, 'agent').catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
+    });
+  }, logInfo);
+  logInfo('Auto-read on');
+}
+
+async function toggleAutoRead(context: vscode.ExtensionContext): Promise<void> {
+  const next = !getAutoReadEnabled(context);
+  await setAutoReadEnabled(context, next);
+  vscode.window.showInformationMessage(
+    next
+      ? 'Varterm auto-read is on. New assistant replies will play when they finish.'
+      : 'Varterm auto-read is off.'
+  );
+}
+
+function stopHostPlayback(): void {
+  if (!playbackProcess) {
+    return;
+  }
+  const child = playbackProcess;
+  playbackProcess = undefined;
+  try {
+    child.kill('SIGTERM');
+  } catch {
+    // Already exited.
+  }
+}
+
+async function playTracksInCursor(context: vscode.ExtensionContext, tracks: AudioTrack[]): Promise<void> {
+  stopHostPlayback();
+  const outputDir = audioCacheDir(context);
+  await vscode.workspace.fs.createDirectory(outputDir);
+
+  const files: string[] = [];
+  const stamp = Date.now();
+  for (let i = 0; i < tracks.length; i += 1) {
+    const uri = vscode.Uri.joinPath(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(tracks[i].base64, 'base64'));
+    files.push(uri.fsPath);
+  }
+
+  if (process.platform !== 'darwin') {
+    throw new Error('Background playback currently uses macOS afplay.');
+  }
+
+  for (const filePath of files) {
+    const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+    logInfo(`Audio file ${filePath} size=${stat.size}`);
+    if (stat.size < 100) {
+      throw new Error('Generated audio file was empty. Try again.');
+    }
+  }
+
+  setPlaybackStatus('$(unmute) Varterm playing — click to stop', 'playing');
+  logInfo(`Playing ${files.length} track(s) with /usr/bin/afplay`);
+
+  try {
+    await playFilesWithAfplay(files);
+  } finally {
+    if (playbackState === 'playing') {
+      setIdleStatus();
+    }
+    void pruneAudioCache(context);
+  }
+}
+
+function playFilesWithAfplay(files: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let index = 0;
+
+    const playNext = (): void => {
+      if (index >= files.length) {
+        playbackProcess = undefined;
+        resolve();
+        return;
+      }
+
+      const filePath = files[index];
+      index += 1;
+      const child = spawn('/usr/bin/afplay', [filePath], {
+        stdio: 'ignore',
+        env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+      });
+      playbackProcess = child;
+
+      child.on('error', (error) => {
+        if (playbackProcess === child) {
+          playbackProcess = undefined;
+        }
+        reject(error);
+      });
+
+      child.on('close', (code) => {
+        if (playbackProcess !== child) {
+          resolve();
+          return;
+        }
+        if (code && code !== 0) {
+          playbackProcess = undefined;
+          reject(new Error(`afplay exited with code ${code}`));
+          return;
+        }
+        playNext();
+      });
+    };
+
+    playNext();
+  });
 }
 
 type VoiceOption = {
@@ -96,10 +284,12 @@ function getSettings(): ExtensionSettings {
     askMaxChunks: config.get<number>('askMaxChunks', 8),
     askMaxContextChars: config.get<number>('askMaxContextChars', 15000),
     autoReadAnswersAloud: config.get<boolean>('autoReadAnswersAloud', false),
+    autoReadAgentOutput: config.get<boolean>('autoReadAgentOutput', false),
     readAloudVoice: config.get<string>('readAloudVoice', 'en-US-AriaNeural'),
     readAloudRate: config.get<number>('readAloudRate', 1),
     readAloudProvider: config.get<'edge' | 'premium'>('readAloudProvider', 'edge'),
-    maxCachedAudioFiles: config.get<number>('maxCachedAudioFiles', 20),
+    maxCachedAudioFiles: config.get<number>('maxCachedAudioFiles', 8),
+    maxCachedAudioAgeHours: config.get<number>('maxCachedAudioAgeHours', 24),
   };
 }
 
@@ -655,8 +845,18 @@ async function readTextAloud(
 ): Promise<void> {
   logInfo(`readTextAloud start: label=${label}, chars=${text.length}`);
   if (isGeneratingAudio) {
-    vscode.window.showWarningMessage('Varterm is already generating audio. Please wait.');
-    return;
+    const choice = await vscode.window.showWarningMessage(
+      'Varterm is still generating audio.',
+      'Cancel and start over',
+      'Wait'
+    );
+    if (choice !== 'Cancel and start over') {
+      return;
+    }
+    generationCts?.cancel();
+    generationCts?.dispose();
+    generationCts = undefined;
+    isGeneratingAudio = false;
   }
 
   const settings = getSettings();
@@ -665,8 +865,12 @@ async function readTextAloud(
     throw new Error('No text available to read aloud.');
   }
 
-  showAudioLoadingPanel(context, label);
+  stopHostPlayback();
   isGeneratingAudio = true;
+  generationCts = new vscode.CancellationTokenSource();
+  const token = generationCts.token;
+  setPlaybackStatus('$(loading~spin) Varterm generating…', 'generating');
+  playerProvider?.post({ type: 'loading', label });
 
   try {
     const selectedVoiceId = context.globalState.get<string>(VOICE_ID_KEY) || settings.readAloudVoice;
@@ -678,7 +882,7 @@ async function readTextAloud(
     const chunks = splitTextIntoChunks(normalized, maxCharsPerTrack);
     logInfo(`Using provider=${selectedProvider}, chunks=${chunks.length}`);
 
-    const tracks: Array<{ title: string; base64: string }> = [];
+    const tracks: AudioTrack[] = [];
     for (let i = 0; i < chunks.length; i += 1) {
       const chunkText = chunks[i];
       logInfo(`Generating chunk ${i + 1}/${chunks.length}, chars=${chunkText.length}`);
@@ -692,7 +896,10 @@ async function readTextAloud(
 
       let audioBytes: Uint8Array;
       try {
-        audioBytes = await postBinary(context, endpoint, payload);
+        if (token.isCancellationRequested) {
+          throw new Error('Cancelled');
+        }
+        audioBytes = await postBinary(context, endpoint, payload, { cancellationToken: token });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const premiumKeyMissing =
@@ -705,7 +912,7 @@ async function readTextAloud(
         voiceToUse = 'en-US-AriaNeural';
         endpoint = '/api/edge-tts';
         payload = { text: chunkText, voice: voiceToUse, rate: settings.readAloudRate };
-        audioBytes = await postBinary(context, endpoint, payload);
+        audioBytes = await postBinary(context, endpoint, payload, { cancellationToken: token });
 
         await context.globalState.update(VOICE_PROVIDER_KEY, providerToUse);
         await context.globalState.update(VOICE_ID_KEY, voiceToUse);
@@ -722,394 +929,226 @@ async function readTextAloud(
     }
     logInfo(`Generated audio tracks: ${tracks.length}`);
 
-    const outputDir = vscode.Uri.joinPath(context.globalStorageUri, 'audio');
-    await vscode.workspace.fs.createDirectory(outputDir);
-    await pruneAudioCache(context, outputDir, settings.maxCachedAudioFiles);
-    const fileName = `varterm-${Date.now()}-part1.mp3`;
-    const outputFile = vscode.Uri.joinPath(outputDir, fileName);
-    await vscode.workspace.fs.writeFile(outputFile, Buffer.from(tracks[0].base64, 'base64'));
-    latestAudioFileUri = outputFile;
-    showAudioPanel(context, tracks, label, {
-      voiceId: selectedVoiceId,
+    latestPlayback = { tracks, label };
+    playerProvider?.post({
+      type: 'ready',
+      tracks,
+      label,
       voiceName: context.globalState.get<string>(VOICE_NAME_KEY) || selectedVoiceId,
       provider: selectedProvider,
-      rate: settings.readAloudRate,
     });
-    const action = await vscode.window.showInformationMessage(
-      `Varterm audio ready (${label}). Playing in editor.`,
-      'Open in default player',
-      'Reveal audio file'
-    );
-
-    if (action === 'Open in default player') {
-      if (latestAudioFileUri) {
-        await vscode.env.openExternal(latestAudioFileUri);
-      }
-    } else if (action === 'Reveal audio file') {
-      if (latestAudioFileUri) {
-        await vscode.commands.executeCommand('revealFileInOS', latestAudioFileUri);
-      }
-    }
+    isGeneratingAudio = false;
+    await playTracksInCursor(context, tracks);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`readTextAloud error: ${message}`);
-    showAudioErrorPanel(context, label, message);
+    setPlaybackStatus('$(error) Varterm failed — click to retry', 'idle');
+    getOutputChannel().show(true);
+    playerProvider?.post({ type: 'error', label, message });
     throw error;
   } finally {
     isGeneratingAudio = false;
+    generationCts?.dispose();
+    generationCts = undefined;
   }
 }
 
-async function pruneAudioCache(
-  context: vscode.ExtensionContext,
-  outputDir: vscode.Uri,
-  maxFiles: number
-): Promise<void> {
-  const safeMaxFiles = Math.max(1, Math.min(200, maxFiles));
-  const entries = await vscode.workspace.fs.readDirectory(outputDir);
-  const audioEntries = entries.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.mp3'));
+function audioCacheDir(context: vscode.ExtensionContext): vscode.Uri {
+  return vscode.Uri.joinPath(context.globalStorageUri, 'audio');
+}
 
-  if (audioEntries.length <= safeMaxFiles) {
-    return;
+function toSafeFileStem(label: string): string {
+  const cleaned = label
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return cleaned || 'audio';
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function listCachedAudio(outputDir: vscode.Uri): Promise<Array<{ uri: vscode.Uri; mtime: number; size: number }>> {
+  let entries: Array<[string, vscode.FileType]>;
+  try {
+    entries = await vscode.workspace.fs.readDirectory(outputDir);
+  } catch {
+    return [];
   }
 
-  const withStats = await Promise.all(
+  const audioEntries = entries.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.mp3'));
+  return Promise.all(
     audioEntries.map(async ([name]) => {
       const uri = vscode.Uri.joinPath(outputDir, name);
       const stat = await vscode.workspace.fs.stat(uri);
-      return { uri, mtime: stat.mtime };
+      return { uri, mtime: stat.mtime, size: stat.size };
     })
   );
+}
 
-  withStats.sort((a, b) => b.mtime - a.mtime);
-  const stale = withStats.slice(safeMaxFiles);
-  await Promise.all(stale.map(async (file) => vscode.workspace.fs.delete(file.uri)));
+async function pruneAudioCache(context: vscode.ExtensionContext): Promise<void> {
+  const settings = getSettings();
+  const outputDir = audioCacheDir(context);
+  const files = await listCachedAudio(outputDir);
+  if (!files.length) {
+    return;
+  }
+
+  const safeMaxFiles = Math.max(0, Math.min(200, settings.maxCachedAudioFiles));
+  const maxAgeHours = Math.max(0, Math.min(24 * 90, settings.maxCachedAudioAgeHours));
+  const now = Date.now();
+  const expired =
+    maxAgeHours > 0 ? files.filter((file) => now - file.mtime > maxAgeHours * 60 * 60 * 1000) : [];
+  const expiredUris = new Set(expired.map((file) => file.uri.toString()));
+  const remaining = files.filter((file) => !expiredUris.has(file.uri.toString()));
+
+  remaining.sort((a, b) => b.mtime - a.mtime);
+  const overLimit = remaining.slice(safeMaxFiles);
+  const stale = [...expired, ...overLimit];
+  await Promise.all(stale.map(async (file) => vscode.workspace.fs.delete(file.uri, { useTrash: false })));
+  if (stale.length) {
+    logInfo(`Pruned ${stale.length} cached audio file(s)`);
+  }
+}
+
+async function saveLatestAudio(trackIndex = 0): Promise<void> {
+  if (!latestPlayback?.tracks.length) {
+    throw new Error('No audio is ready yet. Generate a reading first.');
+  }
+
+  const index = Math.max(0, Math.min(trackIndex, latestPlayback.tracks.length - 1));
+  const stem = toSafeFileStem(latestPlayback.label);
+  const defaultName =
+    latestPlayback.tracks.length === 1 ? `varterm-${stem}.mp3` : `varterm-${stem}-part${index + 1}.mp3`;
+  const uri = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(defaultName),
+    filters: { 'MP3 audio': ['mp3'] },
+    saveLabel: 'Save MP3',
+    title: 'Save Varterm audio',
+  });
+  if (!uri) {
+    return;
+  }
+
+  await vscode.workspace.fs.writeFile(uri, Buffer.from(latestPlayback.tracks[index].base64, 'base64'));
+  vscode.window.showInformationMessage(`Saved ${uri.fsPath.split('/').pop() || 'audio file'}.`);
 }
 
 async function clearAudioCache(context: vscode.ExtensionContext): Promise<void> {
-  const outputDir = vscode.Uri.joinPath(context.globalStorageUri, 'audio');
-  try {
-    const entries = await vscode.workspace.fs.readDirectory(outputDir);
-    const audioEntries = entries.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.mp3'));
-    await Promise.all(
-      audioEntries.map(async ([name]) => vscode.workspace.fs.delete(vscode.Uri.joinPath(outputDir, name)))
-    );
-    vscode.window.showInformationMessage(`Cleared ${audioEntries.length} cached audio file(s).`);
-  } catch {
+  const outputDir = audioCacheDir(context);
+  const audioEntries = await listCachedAudio(outputDir);
+  if (!audioEntries.length) {
     vscode.window.showInformationMessage('No cached audio files found.');
+    return;
   }
+
+  const totalBytes = audioEntries.reduce((sum, file) => sum + file.size, 0);
+  await Promise.all(audioEntries.map(async (file) => vscode.workspace.fs.delete(file.uri, { useTrash: false })));
+  vscode.window.showInformationMessage(
+    `Cleared ${audioEntries.length} cached audio file(s) (${formatBytes(totalBytes)}).`
+  );
 }
 
 async function openSettings(): Promise<void> {
   await vscode.commands.executeCommand('workbench.action.openSettings', 'vartermCursor');
 }
 
-function showAudioPanel(
-  context: vscode.ExtensionContext,
-  tracks: Array<{ title: string; base64: string }>,
-  label: string,
-  playback: { voiceId: string; voiceName: string; provider: 'edge' | 'premium'; rate: number }
-): void {
-  const tracksJson = JSON.stringify(tracks);
-  const panel = ensureAudioPanel(context);
-  panel.reveal(vscode.ViewColumn.Beside, false);
-
-  panel.title = `Varterm Audio (${label})`;
-  panel.webview.html = `<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Varterm Audio</title>
-    <style>
-      body { font-family: sans-serif; padding: 8px 12px; color: #f4f4f5; background: #0a0a0b; }
-      .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-      .title { font-size: 13px; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .meta { font-size: 12px; opacity: 0.7; }
-      .status { font-size: 11px; opacity: 0.7; margin-top: 6px; min-height: 14px; }
-      audio { width: 100%; margin-top: 8px; height: 28px; }
-      select { width: 100%; margin-top: 8px; background: #121214; color: #f4f4f5; border: 1px solid #2a2a2e; border-radius: 4px; padding: 4px; }
-      .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
-      .controls button, .controls select, .controls input {
-        background: #121214; color: #f4f4f5; border: 1px solid #2a2a2e; border-radius: 4px; padding: 4px;
-        min-height: 30px; box-sizing: border-box;
-      }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
-      .actions button {
-        background: #103a35; color: #eafff8; border: 1px solid #1e6f62; border-radius: 4px; padding: 6px;
-        font-size: 12px; min-height: 30px; box-sizing: border-box;
-      }
-      .actions button:hover { background: #145248; }
-    </style>
-  </head>
-  <body>
-    <div class="row">
-      <div class="title">Varterm Read Aloud</div>
-      <div class="meta" id="partMeta"></div>
-    </div>
-    <div class="meta">${escapeHtml(label)}</div>
-    <div class="controls">
-      <select id="providerSelect">
-        <option value="edge">Edge (free)</option>
-        <option value="premium">Premium (ElevenLabs API key needed)</option>
-      </select>
-      <button id="changeVoiceBtn" type="button">Voice: ${escapeHtml(playback.voiceName)}</button>
-    </div>
-    <select id="trackSelect"></select>
-    <div class="actions">
-      <button id="readClipboardBtn" type="button">Read Clipboard</button>
-      <button id="readEditorBtn" type="button">Read Editor/Selection</button>
-      <button id="openSettingsBtn" type="button">Open Settings</button>
-      <button id="clearCacheBtn" type="button">Clear Audio Cache</button>
-    </div>
-    <audio id="player" controls autoplay></audio>
-    <div id="status" class="status"></div>
-    <script>
-      const tracks = ${tracksJson};
-      const player = document.getElementById('player');
-      const select = document.getElementById('trackSelect');
-      const partMeta = document.getElementById('partMeta');
-      const providerSelect = document.getElementById('providerSelect');
-      const changeVoiceBtn = document.getElementById('changeVoiceBtn');
-      const readClipboardBtn = document.getElementById('readClipboardBtn');
-      const readEditorBtn = document.getElementById('readEditorBtn');
-      const openSettingsBtn = document.getElementById('openSettingsBtn');
-      const clearCacheBtn = document.getElementById('clearCacheBtn');
-      const vscodeApi = acquireVsCodeApi();
-      const statusEl = document.getElementById('status');
-      let autoPlayInProgress = false;
-      let objectUrls = [];
-
-      function toObjectUrl(base64Audio) {
-        const binary = atob(base64Audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        const blob = new Blob([bytes], { type: 'audio/mpeg' });
-        const url = URL.createObjectURL(blob);
-        objectUrls.push(url);
-        return url;
-      }
-
-      function clearObjectUrls() {
-        for (const url of objectUrls) {
-          URL.revokeObjectURL(url);
-        }
-        objectUrls = [];
-      }
-
-      function renderOptions() {
-        if (tracks.length <= 1) {
-          select.style.display = 'none';
-          return;
-        }
-        select.style.display = 'block';
-        select.innerHTML = tracks.map((t, i) => '<option value="' + i + '">' + t.title + '</option>').join('');
-      }
-
-      function loadTrack(index) {
-        const track = tracks[index];
-        if (!track) return;
-        // Blob URLs are more reliable than large data: URIs in webviews.
-        player.src = toObjectUrl(track.base64);
-        partMeta.textContent = (index + 1) + '/' + tracks.length;
-        select.value = String(index);
-        tryAutoPlay();
-      }
-
-      async function tryAutoPlay() {
-        if (autoPlayInProgress) {
-          return;
-        }
-        autoPlayInProgress = true;
-        statusEl.textContent = 'Starting playback...';
-        for (let attempt = 0; attempt < 10; attempt++) {
-          try {
-            player.muted = true;
-            player.autoplay = true;
-            if (attempt === 0) {
-              player.load();
-            }
-            await player.play();
-            setTimeout(() => { player.muted = false; }, 220);
-            statusEl.textContent = '';
-            autoPlayInProgress = false;
-            return;
-          } catch (e) {
-            await new Promise((resolve) => setTimeout(resolve, 180));
-          }
-        }
-        player.muted = false;
-        statusEl.textContent = 'Autoplay blocked. Press play once to enable.';
-        vscodeApi.postMessage({ type: 'autoplayBlocked' });
-        autoPlayInProgress = false;
-      }
-
-      select.addEventListener('change', () => {
-        loadTrack(Number(select.value));
-      });
-
-      player.addEventListener('ended', () => {
-        const current = Number(select.value);
-        if (current + 1 < tracks.length) {
-          loadTrack(current + 1);
-        }
-      });
-
-      player.addEventListener('play', () => {
-        statusEl.textContent = '';
-      });
-      player.addEventListener('error', () => {
-        const mediaError = player.error;
-        const code = mediaError ? mediaError.code : 'unknown';
-        statusEl.textContent = 'Playback failed. Use "Open in default player" or try again.';
-        vscodeApi.postMessage({
-          type: 'playerError',
-          detail: 'HTML audio playback error (code: ' + code + ')'
-        });
-      });
-
-      providerSelect.value = '${playback.provider}';
-      providerSelect.addEventListener('change', () => {
-        vscodeApi.postMessage({ type: 'setProvider', value: providerSelect.value });
-      });
-      changeVoiceBtn.addEventListener('click', () => {
-        vscodeApi.postMessage({ type: 'changeVoice' });
-      });
-      readClipboardBtn.addEventListener('click', () => {
-        vscodeApi.postMessage({ type: 'runCommand', command: 'vartermCursor.readClipboardAloud' });
-      });
-      readEditorBtn.addEventListener('click', () => {
-        vscodeApi.postMessage({ type: 'runCommand', command: 'vartermCursor.readEditorAloud' });
-      });
-      openSettingsBtn.addEventListener('click', () => {
-        vscodeApi.postMessage({ type: 'runCommand', command: 'vartermCursor.openSettings' });
-      });
-      clearCacheBtn.addEventListener('click', () => {
-        vscodeApi.postMessage({ type: 'runCommand', command: 'vartermCursor.clearAudioCache' });
-      });
-      window.addEventListener('message', (event) => {
-        if (event?.data?.type === 'attemptAutoplay') {
-          if (player.paused) {
-            tryAutoPlay();
-          }
-        }
-      });
-      window.addEventListener('beforeunload', () => {
-        clearObjectUrls();
-      });
-
-      renderOptions();
-      loadTrack(0);
-    </script>
-  </body>
-</html>`;
+function formatShortcutDisplay(raw: string): string {
+  return raw
+    .replace(/cmd/gi, '⌘')
+    .replace(/ctrl/gi, 'Ctrl')
+    .replace(/shift/gi, 'Shift')
+    .replace(/alt/gi, '⌥')
+    .replace(/\+/g, '+');
 }
 
-function showAudioLoadingPanel(context: vscode.ExtensionContext, label: string): void {
-  const panel = ensureAudioPanel(context);
-  panel.reveal(vscode.ViewColumn.Beside, false);
-  panel.title = `Varterm Audio (${label})`;
-  panel.webview.html = `<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: sans-serif; padding: 12px; color: #f4f4f5; background: #0a0a0b; }
-      .status { font-size: 13px; opacity: 0.9; }
-      .meta { margin-top: 6px; font-size: 12px; opacity: 0.75; }
-    </style>
-  </head>
-  <body>
-    <div class="status">Preparing audio...</div>
-    <div class="meta">${escapeHtml(label)}</div>
-  </body>
-</html>`;
+function getShortcutLabel(command: keyof typeof SHIPPED_SHORTCUTS): string {
+  const raw =
+    process.platform === 'darwin' ? SHIPPED_SHORTCUTS[command].mac : SHIPPED_SHORTCUTS[command].win;
+  return formatShortcutDisplay(raw);
 }
 
-function showAudioErrorPanel(context: vscode.ExtensionContext, label: string, message: string): void {
-  const panel = ensureAudioPanel(context);
-  panel.reveal(vscode.ViewColumn.Beside, false);
-  panel.title = `Varterm Audio (${label})`;
-  panel.webview.html = `<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: sans-serif; padding: 12px; color: #f4f4f5; background: #0a0a0b; }
-      .status { font-size: 13px; color: #ff9b9b; }
-      .meta { margin-top: 6px; font-size: 12px; opacity: 0.8; white-space: pre-wrap; }
-    </style>
-  </head>
-  <body>
-    <div class="status">Audio generation failed</div>
-    <div class="meta">${escapeHtml(message)}</div>
-  </body>
-</html>`;
+async function openKeyboardShortcuts(): Promise<void> {
+  await vscode.commands.executeCommand(
+    'workbench.action.openGlobalKeybindings',
+    '@ext:varterm.varterm-cursor'
+  );
 }
 
-function ensureAudioPanel(context: vscode.ExtensionContext): vscode.WebviewPanel {
-  if (!audioPanel) {
-    audioPanel = vscode.window.createWebviewPanel(
-      'vartermAudioPlayer',
-      'Varterm Audio',
-      vscode.ViewColumn.Beside,
-      { enableScripts: true, retainContextWhenHidden: true }
-    );
-    audioPanel.onDidDispose(() => {
-      audioPanel = undefined;
-    });
-    audioPanel.onDidChangeViewState((event) => {
-      if (event.webviewPanel.visible) {
-        event.webviewPanel.webview.postMessage({ type: 'attemptAutoplay' });
-      }
-    });
-    audioPanel.webview.onDidReceiveMessage(async (message) => {
-      if (message?.type === 'changeVoice') {
-        await selectReadAloudVoice(context);
-        return;
-      }
-
-      if (message?.type === 'setProvider') {
-        const provider = message.value === 'premium' ? 'premium' : 'edge';
-        await vscode.workspace
-          .getConfiguration('vartermCursor')
-          .update('readAloudProvider', provider, vscode.ConfigurationTarget.Global);
-        await context.globalState.update(VOICE_PROVIDER_KEY, provider);
-        return;
-      }
-
-      if (message?.type === 'setRate') {
-        const nextRate = Number(message.value);
-        const safeRate = Math.max(0.5, Math.min(2, Number.isFinite(nextRate) ? nextRate : 1));
-        await vscode.workspace
-          .getConfiguration('vartermCursor')
-          .update('readAloudRate', safeRate, vscode.ConfigurationTarget.Global);
-        return;
-      }
-
-      if (message?.type === 'runCommand' && typeof message.command === 'string') {
-        await vscode.commands.executeCommand(message.command);
-        return;
-      }
-
-      if (message?.type === 'autoplayBlocked') {
-        logInfo('Webview autoplay blocked');
-        vscode.window.showWarningMessage('Autoplay was blocked. Press play once in the editor player.');
-        return;
-      }
-
-      if (message?.type === 'playerError' && typeof message.detail === 'string') {
-        logInfo(`Webview player error: ${message.detail}`);
-        vscode.window.showErrorMessage(`Varterm player error: ${message.detail}`);
-      }
-    });
+async function maybeShowShortcutsTip(context: vscode.ExtensionContext): Promise<void> {
+  if (context.globalState.get<boolean>(SHORTCUTS_TIP_KEY)) {
+    return;
   }
-  audioPanel.reveal(vscode.ViewColumn.Beside, false);
-  return audioPanel;
+
+  const clipboard = getShortcutLabel('readClipboardAloud');
+  const choice = await vscode.window.showInformationMessage(
+    `Varterm: Copy text, then press ${clipboard} to hear it aloud.`,
+    'Customize shortcuts',
+    'Got it'
+  );
+
+  if (choice === 'Customize shortcuts') {
+    await openKeyboardShortcuts();
+  }
+
+  await context.globalState.update(SHORTCUTS_TIP_KEY, true);
+}
+
+function showPlayerNeedText(): void {
+  playerProvider?.post({ type: 'needText' });
+  vscode.window.showWarningMessage('Nothing to read. Copy text, then press the Varterm shortcut again.');
+}
+
+function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<string, unknown>): void {
+  // Leave the webview message turn before starting work so focus/generation cannot deadlock.
+  setTimeout(() => {
+    void (async () => {
+      try {
+        if (message?.type === 'changeVoice') {
+          await selectReadAloudVoice(context);
+          return;
+        }
+
+        if (message?.type === 'setProvider') {
+          const provider = message.value === 'premium' ? 'premium' : 'edge';
+          await vscode.workspace
+            .getConfiguration('vartermCursor')
+            .update('readAloudProvider', provider, vscode.ConfigurationTarget.Global);
+          await context.globalState.update(VOICE_PROVIDER_KEY, provider);
+          return;
+        }
+
+        if (message?.type === 'readPasted' && typeof message.text === 'string') {
+          await readTextAloud(context, message.text, 'pasted');
+          return;
+        }
+
+        if (message?.type === 'runCommand' && typeof message.command === 'string') {
+          await vscode.commands.executeCommand(message.command);
+          return;
+        }
+
+        if (message?.type === 'saveAudio') {
+          await saveLatestAudio(Number(message.trackIndex) || 0);
+          return;
+        }
+
+        if (message?.type === 'playerError' && typeof message.detail === 'string') {
+          logInfo(`Webview player error: ${message.detail}`);
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'Unexpected error';
+        vscode.window.showErrorMessage(`Varterm: ${detail}`);
+      }
+    })();
+  }, 0);
 }
 
 function splitTextIntoChunks(text: string, maxChars: number): string[] {
@@ -1137,13 +1176,28 @@ function splitTextIntoChunks(text: string, maxChars: number): string[] {
   return chunks;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<void> {
+  if (playbackState === 'playing') {
+    stopHostPlayback();
+    setIdleStatus();
+    return;
+  }
+
+  if (playbackState === 'generating') {
+    generationCts?.cancel();
+    generationCts?.dispose();
+    generationCts = undefined;
+    isGeneratingAudio = false;
+    setIdleStatus();
+    return;
+  }
+
+  if (latestPlayback?.tracks.length) {
+    await playTracksInCursor(context, latestPlayback.tracks);
+    return;
+  }
+
+  await readClipboardAloud(context);
 }
 
 async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> {
@@ -1163,17 +1217,7 @@ async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> 
     return;
   }
 
-  const manual = await vscode.window.showInputBox({
-    title: 'Varterm Read Aloud',
-    prompt: 'No editor/clipboard text found. Paste text to read aloud.',
-    ignoreFocusOut: true,
-    value: '',
-  });
-  if (!manual || !manual.trim()) {
-    throw new Error('No text provided to read aloud.');
-  }
-
-  await readTextAloud(context, manual.trim(), 'manual input');
+  showPlayerNeedText();
 }
 
 async function readClipboardAloud(context: vscode.ExtensionContext): Promise<void> {
@@ -1183,25 +1227,38 @@ async function readClipboardAloud(context: vscode.ExtensionContext): Promise<voi
     return;
   }
 
-  const manual = await vscode.window.showInputBox({
-    title: 'Varterm Read Clipboard Aloud',
-    prompt: 'Clipboard is empty. Paste text to read aloud.',
-    ignoreFocusOut: true,
-    value: '',
-  });
-  if (!manual || !manual.trim()) {
-    throw new Error('Clipboard is empty and no manual text was provided.');
-  }
-
-  await readTextAloud(context, manual.trim(), 'manual input');
+  showPlayerNeedText();
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  extensionContext = context;
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 80);
+  statusBar.show();
+  context.subscriptions.push(statusBar);
+  setIdleStatus();
+
+  autoReadStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 79);
+  autoReadStatusBar.command = 'vartermCursor.toggleAutoRead';
+  context.subscriptions.push(autoReadStatusBar);
+  setAutoReadStatus(getAutoReadEnabled(context) || getSettings().autoReadAgentOutput);
+
   context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor?.viewColumn) {
-        lastEditorColumn = editor.viewColumn;
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration('vartermCursor.autoReadAgentOutput')) {
+        return;
       }
+      const enabled = getSettings().autoReadAgentOutput;
+      if (enabled === getAutoReadEnabled(context) && Boolean(autoReadWatcher) === enabled) {
+        return;
+      }
+      void setAutoReadEnabled(context, enabled);
+    })
+  );
+
+  playerProvider = new VartermPlayerViewProvider((message) => handlePlayerMessage(context, message));
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(PLAYER_VIEW_ID, playerProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
     })
   );
 
@@ -1224,9 +1281,24 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.readEditorAloud', () => readEditorAloud(context));
   register('vartermCursor.readClipboardAloud', () => readClipboardAloud(context));
   register('vartermCursor.openSettings', () => openSettings());
+  register('vartermCursor.openKeyboardShortcuts', () => openKeyboardShortcuts());
   register('vartermCursor.clearAudioCache', () => clearAudioCache(context));
+  register('vartermCursor.stopPlayback', async () => {
+    stopHostPlayback();
+    setIdleStatus();
+  });
+  register('vartermCursor.statusBarAction', () => handleStatusBarAction(context));
+  register('vartermCursor.toggleAutoRead', () => toggleAutoRead(context));
+  register('vartermCursor.saveLastAudio', () => saveLatestAudio());
+
+  void pruneAudioCache(context);
+  void maybeShowShortcutsTip(context);
+  if (getAutoReadEnabled(context) || getSettings().autoReadAgentOutput) {
+    void setAutoReadEnabled(context, true);
+  }
 }
 
 export function deactivate(): void {
-  // No-op.
+  autoReadWatcher?.dispose();
+  stopHostPlayback();
 }

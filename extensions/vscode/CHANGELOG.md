@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.1.27 - 2026-08-25
+
+### Added
+- MIT `LICENSE` file in the VSIX so Open VSX can show the license on the listing.
+
+## 0.1.26 - 2026-08-25
+
+### Changed
+- Marketplace icon is now the official Varterm mark from varterm.com (512×512).
+
+## 0.1.25 - 2026-08-25
+
+### Changed
+- Marketplace and in-editor copy no longer mention Cursor or agent readout. Listing is VS Code / editor TTS.
+
+## 0.1.24 - 2026-08-25
+
+### Added
+- Status bar **Auto-read** toggle. When on, Varterm plays Cursor agent replies after they finish (`afterAgentResponse` hook).
+
+## 0.1.23 - 2026-08-25
+
+### Fixed
+- Status bar speaker-with-X (`$(mute)`) only ran Stop, so clicks did nothing and it looked broken.
+- It now shows a Play control: click to read clipboard, replay last audio, or stop. Playback uses `/usr/bin/afplay`.
+
+## 0.1.22 - 2026-08-25
+
+### Fixed
+- Stopped opening an editor-tab webview player. Cursor was flashing it at the top of the editor and dismissing it before anything could play.
+- Playback now uses macOS `afplay` in the background so you stay in the editor and actually hear audio.
+- Status bar shows generating/playing. Click it or run **Varterm: Stop Playback** to stop.
+
+## 0.1.21 - 2026-08-25
+
+### Fixed
+- Stopped waiting on `player.focus`, which flashed the top of the editor and could hang generation so retries said "already generating audio".
+- Retry now offers **Cancel and start over** instead of getting stuck.
+- Player opens as a visible split with Play / Pause / Stop. Press **Play** if you do not hear audio.
+
+## 0.1.20 - 2026-08-25
+
+### Fixed
+- Playback now stays in Cursor: a bottom **Varterm / Player** panel with large Play / Pause / Stop / seek controls.
+- Removed "open in default/system player" and the top input-box path that claimed audio was playing when nothing was audible.
+- Native `<audio>` controls were clipped and easy to miss; custom controls are the player.
+
+### Changed
+- Paste text in the player panel and press **Read pasted text**. No toast, no Finder, no Music.app.
+
+## 0.1.19 - 2026-08-25
+
+### Fixed
+- **Open in System Player** now launches the OS audio app (`open` on macOS) instead of Cursor's `openExternal`, which often did nothing for local MP3s.
+
+### Changed
+- Playback stays in the editor panel. The post-generation toast ("Reveal audio file") is gone.
+- Generated audio is kept in memory. An MP3 is written only when you open the system player or save a file.
+- Cache now auto-prunes by count (default 8) and age (default 24 hours). **Clear Audio Cache** reports how much space was freed.
+- Player panel adds **Open in System Player** and **Save MP3…**.
+
+## 0.1.18 - 2026-08-25
+
+### Changed
+- macOS default for **Read Clipboard** is now **`Cmd+Shift+Option+L`** (Listen) instead of `Cmd+Shift+Y`, which conflicts with macOS Stickies on many systems.
+- macOS default for **Read Editor/Selection** is now **`Cmd+Shift+Option+R`** to reduce clashes with built-in editor shortcuts.
+
+## 0.1.17 - 2026-08-25
+
+### Added
+- Default keyboard shortcuts (no manual binding required):
+  - **Read Clipboard (agent output):** `Cmd+Shift+Y` (macOS) / `Ctrl+Shift+Y` (Windows/Linux)
+  - **Read Editor/Selection:** `Cmd+Shift+R` / `Ctrl+Shift+R` when the editor is focused
+- **`Varterm: Customize Keyboard Shortcuts`** — opens Keyboard Shortcuts filtered to Varterm so users can change or remove bindings
+- Player panel **Shortcuts** section with a **Change or remove shortcuts…** button
+- One-time tip on first install explaining the agent readout flow (copy → shortcut)
+
 ## 0.1.16 - 2026-05-20
 
 ### Fixed

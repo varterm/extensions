@@ -5,7 +5,7 @@ Source code for Varterm browser and editor extensions.
 ## Repository Layout
 
 - `extensions/chrome` - Chrome extension source and packaging script.
-- `extensions/vscode` - VS Code/Cursor extension source and packaging script.
+- `extensions/vscode` - VS Code extension source and packaging script.
 - `packages/tts-client` - shared API client used by extension surfaces.
 
 ## Build and Package
@@ -17,7 +17,7 @@ cd extensions/chrome
 bash package.sh
 ```
 
-### VS Code / Cursor Extension
+### VS Code Extension
 
 ```bash
 cd extensions/vscode
