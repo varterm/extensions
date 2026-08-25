@@ -31,3 +31,12 @@ GitHub release workflow packages both extension artifacts:
 
 - `extensions/chrome/varterm-tts-chrome.zip`
 - `extensions/vscode/*.vsix`
+
+Publish the editor VSIX to **VS Code Marketplace** and **Open VSX** (Cursor) in parallel:
+
+```bash
+cd extensions/vscode
+export VSCE_PAT=...   # Azure DevOps PAT with Marketplace publish
+export OVSX_PAT=...   # Open VSX access token
+npm run publish:stores
+```

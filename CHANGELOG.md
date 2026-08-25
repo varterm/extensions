@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.35 - 2026-08-25
+
+### Added
+- **Auto-read** for the agent window: when on, finished assistant replies play aloud.
+- Status bar **play / pause / stop / replay** and **jump** back or forward through remaining parts.
+
+### Fixed
+- Auto-read hook uses an absolute path so Cursor finds it from any workspace.
+- Status bar and Auto-read appear when the window loads.
+- Play prefers the editor selection. Jump stays on the next remaining part.
+- Auto-read on/off toast shows the full sentence.
+
 ## 0.1.27 - 2026-08-25
 
 ### Added

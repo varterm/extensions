@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.1.35 - 2026-08-25
+
+### Added
+- **Auto-read** for the agent window: when on, a finished assistant reply plays aloud.
+- Status bar **play / pause / stop / replay**, plus **jump** back or forward through remaining parts.
+
+### Fixed
+- Auto-read on/off toast is shorter so the full sentence is visible.
+
+## 0.1.34 - 2026-08-25
+
+### Fixed
+- Jump forward now kills the current `afplay` process before starting the next part, so the old clip cannot keep playing underneath.
+
+## 0.1.33 - 2026-08-25
+
+### Fixed
+- Jump forward now advances one remaining part per tap. Killing the current clip no longer races to the last track, and a single long clip is split into paragraph-sized parts.
+
+## 0.1.32 - 2026-08-25
+
+### Fixed
+- Jump forward now steps through remaining chunks instead of skipping to the end of a single long clip.
+
+## 0.1.31 - 2026-08-25
+
+### Changed
+- Status bar is icon-only while playing: pause, stop, replay, and jump back/forward. Mash jump to skip chunks.
+
+## 0.1.30 - 2026-08-25
+
+### Fixed
+- Auto-read hook now uses an absolute script path so Cursor can find it from any workspace. It was never writing the last agent reply.
+- Status bar Play reads the editor **selection** first. The bar shows whether you are hearing a selection, agent reply, or replay.
+
+## 0.1.29 - 2026-08-25
+
+### Fixed
+- Extension starts when the window finishes loading, so Auto-read and Play/Pause show in the status bar without running a command first.
+
+## 0.1.28 - 2026-08-25
+
+### Added
+- Status bar **Pause** (click while playing) and **Resume** (click while paused). **Stop** sits next to it.
+- Commands: Pause Playback, Resume Playback, Replay Last Audio.
+- One-time prompt to turn Auto-read on. A new assistant reply replaces in-progress audio instead of asking you to wait.
+
 ## 0.1.27 - 2026-08-25
 
 ### Added

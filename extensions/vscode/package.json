@@ -1,8 +1,8 @@
 {
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
-  "description": "Varterm TTS for VS Code. Read editor, selection, and clipboard text aloud with natural voices.",
-  "version": "0.1.27",
+  "description": "Auto-read the agent window, plus editor, selection, and clipboard. Play, pause, stop, and jump from the status bar.",
+  "version": "0.1.35",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -22,6 +22,9 @@
     "Other"
   ],
   "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -45,6 +48,10 @@
         "title": "Varterm: Read Clipboard Aloud"
       },
       {
+        "command": "vartermCursor.readLastAgentReply",
+        "title": "Varterm: Read Last Agent Reply"
+      },
+      {
         "command": "vartermCursor.openKeyboardShortcuts",
         "title": "Varterm: Customize Keyboard Shortcuts"
       },
@@ -61,8 +68,28 @@
         "title": "Varterm: Stop Playback"
       },
       {
+        "command": "vartermCursor.pausePlayback",
+        "title": "Varterm: Pause Playback"
+      },
+      {
+        "command": "vartermCursor.resumePlayback",
+        "title": "Varterm: Resume Playback"
+      },
+      {
+        "command": "vartermCursor.replayLast",
+        "title": "Varterm: Replay Last Audio"
+      },
+      {
+        "command": "vartermCursor.jumpBack",
+        "title": "Varterm: Jump Back"
+      },
+      {
+        "command": "vartermCursor.jumpForward",
+        "title": "Varterm: Jump Forward"
+      },
+      {
         "command": "vartermCursor.statusBarAction",
-        "title": "Varterm: Play or Stop from Status Bar"
+        "title": "Varterm: Play, Pause, or Resume from Status Bar"
       },
       {
         "command": "vartermCursor.toggleAutoRead",
@@ -176,7 +203,7 @@
         "vartermCursor.autoReadAgentOutput": {
           "type": "boolean",
           "default": false,
-          "description": "When on, play new assistant replies aloud when they finish. Also available as the Auto-read status bar toggle."
+          "description": "When on, play new assistant replies aloud when they finish. Toggle from the Auto-read status bar item. Pause, replay, or stop from the player item."
         },
         "vartermCursor.readAloudVoice": {
           "type": "string",
@@ -222,16 +249,20 @@
     "build": "tsc -p .",
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
-    "package": "npm run build && npx @vscode/vsce package --follow-symlinks"
+    "package": "npm run build && npx @vscode/vsce package --follow-symlinks",
+    "publish:stores": "bash scripts/publish-stores.sh"
   },
   "keywords": [
     "speech-synthesis",
     "voice-reader",
     "accessibility",
     "vscode",
+    "cursor",
     "tts",
     "text-to-speech",
     "read-aloud",
+    "auto-read",
+    "agent",
     "audio"
   ],
   "author": "Varterm",

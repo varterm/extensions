@@ -6,6 +6,7 @@ import {
   AUTO_READ_KEY,
   getAutoReadEnabled,
   installVartermAgentHook,
+  readLastAgentText,
   watchAgentDropFile,
 } from './auto-read';
 
@@ -22,6 +23,7 @@ const DEFAULT_MAX_TOTAL_TEXT_CHARS = 1_000_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_REQUEST_RETRIES = 2;
 const SHORTCUTS_TIP_KEY = 'vartermCursor.shortcutsTipShown';
+const AUTO_READ_TIP_KEY = 'vartermCursor.autoReadTipShown';
 
 const SHIPPED_SHORTCUTS = {
   readClipboardAloud: { mac: 'cmd+shift+alt+l', win: 'ctrl+shift+y' },
@@ -76,8 +78,21 @@ let generationCts: vscode.CancellationTokenSource | undefined;
 let latestPlayback: { tracks: AudioTrack[]; label: string } | undefined;
 let playerProvider: VartermPlayerViewProvider | undefined;
 let playbackProcess: ChildProcess | undefined;
-let playbackState: 'idle' | 'generating' | 'playing' = 'idle';
+const livePlayers = new Set<ChildProcess>();
+const stoppedPlayers = new WeakSet<ChildProcess>();
+let playbackState: 'idle' | 'generating' | 'playing' | 'paused' = 'idle';
+let playbackFiles: string[] = [];
+let playbackIndex = 0;
+let playGeneration = 0;
+let expectedTrackCount = 0;
+let waitingForChunk: number | undefined;
+let playResolve: (() => void) | undefined;
+let playReject: ((error: Error) => void) | undefined;
 let statusBar: vscode.StatusBarItem | undefined;
+let stopStatusBar: vscode.StatusBarItem | undefined;
+let jumpBackBar: vscode.StatusBarItem | undefined;
+let jumpForwardBar: vscode.StatusBarItem | undefined;
+let replayBar: vscode.StatusBarItem | undefined;
 let autoReadStatusBar: vscode.StatusBarItem | undefined;
 let autoReadWatcher: { dispose: () => void } | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
@@ -94,36 +109,86 @@ function logInfo(message: string): void {
   getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
 }
 
-function setPlaybackStatus(text: string, state: typeof playbackState = playbackState): void {
-  playbackState = state;
-  if (!statusBar) {
-    return;
+function refreshTransport(): void {
+  const active = playbackState === 'playing' || playbackState === 'paused';
+  const hasTracks = Boolean(latestPlayback?.tracks.length);
+
+  if (statusBar) {
+    if (playbackState === 'playing') {
+      statusBar.text = '$(debug-pause)';
+      statusBar.tooltip = 'Pause';
+    } else if (playbackState === 'paused') {
+      statusBar.text = '$(play)';
+      statusBar.tooltip = 'Resume';
+    } else if (playbackState === 'generating') {
+      statusBar.text = '$(loading~spin)';
+      statusBar.tooltip = 'Cancel';
+    } else {
+      statusBar.text = '$(play)';
+      statusBar.tooltip = 'Play';
+    }
+    statusBar.command = 'vartermCursor.statusBarAction';
+    statusBar.show();
   }
-  statusBar.text = text;
-  statusBar.command = 'vartermCursor.statusBarAction';
-  statusBar.tooltip =
-    state === 'playing'
-      ? 'Click to stop'
-      : state === 'generating'
-        ? 'Click to cancel'
-        : latestPlayback
-          ? 'Click to play last audio again'
-          : 'Click to read clipboard';
-  statusBar.show();
+
+  if (stopStatusBar) {
+    stopStatusBar.text = '$(debug-stop)';
+    stopStatusBar.tooltip = 'Stop';
+    if (active) {
+      stopStatusBar.show();
+    } else {
+      stopStatusBar.hide();
+    }
+  }
+
+  if (jumpBackBar && jumpForwardBar) {
+    jumpBackBar.text = '$(chevron-left)';
+    const total = expectedTrackCount || playbackFiles.length || latestPlayback?.tracks.length || 0;
+    const position = total ? `${Math.min(playbackIndex + 1, total)}/${total}` : '';
+    jumpBackBar.tooltip = position
+      ? `Jump back ${position}`
+      : 'Jump back (press again to skip further)';
+    jumpForwardBar.text = '$(chevron-right)';
+    jumpForwardBar.tooltip = position
+      ? `Jump forward ${position}`
+      : 'Jump forward (press again to skip further)';
+    if (active || hasTracks) {
+      jumpBackBar.show();
+      jumpForwardBar.show();
+    } else {
+      jumpBackBar.hide();
+      jumpForwardBar.hide();
+    }
+  }
+
+  if (replayBar) {
+    replayBar.text = '$(debug-restart)';
+    replayBar.tooltip = 'Replay from the start';
+    if (hasTracks) {
+      replayBar.show();
+    } else {
+      replayBar.hide();
+    }
+  }
+}
+
+function setPlaybackStatus(_text: string, state: typeof playbackState = playbackState): void {
+  playbackState = state;
+  refreshTransport();
 }
 
 function setIdleStatus(): void {
-  setPlaybackStatus(latestPlayback ? '$(play) Varterm replay' : '$(play) Varterm', 'idle');
+  setPlaybackStatus('$(play)', 'idle');
 }
 
 function setAutoReadStatus(enabled: boolean): void {
   if (!autoReadStatusBar) {
     return;
   }
-  autoReadStatusBar.text = enabled ? '$(broadcast) Auto-read on' : '$(circle-slash) Auto-read off';
+  autoReadStatusBar.text = enabled ? '$(unmute) Auto-read on' : '$(mute) Auto-read off';
   autoReadStatusBar.tooltip = enabled
-    ? 'Varterm will read new assistant replies when they finish. Click to turn off.'
-    : 'Click to auto-read new assistant replies when they finish.';
+    ? 'On: when an assistant reply finishes, Varterm reads it. Click to turn off.'
+    : 'Off: click to auto-read assistant replies when they finish.';
   autoReadStatusBar.show();
 }
 
@@ -144,8 +209,7 @@ async function setAutoReadEnabled(context: vscode.ExtensionContext, enabled: boo
 
   await installVartermAgentHook(context.extensionPath);
   autoReadWatcher = watchAgentDropFile((text) => {
-    stopHostPlayback();
-    void readTextAloud(context, text, 'agent').catch((error) => {
+    void readTextAloud(context, text, 'agent reply', { replace: true }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
     });
@@ -156,28 +220,116 @@ async function setAutoReadEnabled(context: vscode.ExtensionContext, enabled: boo
 async function toggleAutoRead(context: vscode.ExtensionContext): Promise<void> {
   const next = !getAutoReadEnabled(context);
   await setAutoReadEnabled(context, next);
-  vscode.window.showInformationMessage(
-    next
-      ? 'Varterm auto-read is on. New assistant replies will play when they finish.'
-      : 'Varterm auto-read is off.'
-  );
+  vscode.window.showInformationMessage(next ? 'Auto-read on. Finished replies will play.' : 'Auto-read off.');
 }
 
-function stopHostPlayback(): void {
-  if (!playbackProcess) {
-    return;
-  }
-  const child = playbackProcess;
-  playbackProcess = undefined;
+function forceKillChild(child: ChildProcess): void {
+  stoppedPlayers.add(child);
+  livePlayers.delete(child);
   try {
-    child.kill('SIGTERM');
+    child.kill('SIGCONT');
+  } catch {
+    // Not paused.
+  }
+  try {
+    if (child.pid) {
+      try {
+        process.kill(child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    } else {
+      child.kill('SIGKILL');
+    }
   } catch {
     // Already exited.
   }
 }
 
-async function playTracksInCursor(context: vscode.ExtensionContext, tracks: AudioTrack[]): Promise<void> {
+function killPlaybackProcess(): void {
+  const child = playbackProcess;
+  playbackProcess = undefined;
+  if (child) {
+    forceKillChild(child);
+  }
+  for (const extra of [...livePlayers]) {
+    forceKillChild(extra);
+  }
+}
+
+function killPlaybackProcessAsync(): Promise<void> {
+  const children = [
+    ...(playbackProcess ? [playbackProcess] : []),
+    ...livePlayers,
+  ].filter((child, index, all) => all.indexOf(child) === index);
+  playbackProcess = undefined;
+  if (!children.length) {
+    return Promise.resolve();
+  }
+  return Promise.all(
+    children.map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode) {
+            forceKillChild(child);
+            resolve();
+            return;
+          }
+          const finish = () => {
+            child.off('close', finish);
+            resolve();
+          };
+          child.once('close', finish);
+          forceKillChild(child);
+          setTimeout(finish, 250);
+        })
+    )
+  ).then(() => undefined);
+}
+
+function stopHostPlayback(): void {
+  playGeneration += 1;
+  waitingForChunk = undefined;
+  killPlaybackProcess();
+  playResolve?.();
+  playResolve = undefined;
+  playReject = undefined;
+}
+
+function pauseHostPlayback(): boolean {
+  if (!playbackProcess || playbackState !== 'playing') {
+    return false;
+  }
+  try {
+    playbackProcess.kill('SIGSTOP');
+  } catch {
+    return false;
+  }
+  setPlaybackStatus('$(play)', 'paused');
+  return true;
+}
+
+function resumeHostPlayback(): boolean {
+  if (!playbackProcess || playbackState !== 'paused') {
+    return false;
+  }
+  try {
+    playbackProcess.kill('SIGCONT');
+  } catch {
+    return false;
+  }
+  setPlaybackStatus('$(debug-pause)', 'playing');
+  return true;
+}
+
+async function playTracksInCursor(
+  context: vscode.ExtensionContext,
+  tracks: AudioTrack[],
+  startIndex = 0
+): Promise<void> {
   stopHostPlayback();
+  expectedTrackCount = tracks.length;
+  waitingForChunk = undefined;
   const outputDir = audioCacheDir(context);
   await vscode.workspace.fs.createDirectory(outputDir);
 
@@ -201,61 +353,154 @@ async function playTracksInCursor(context: vscode.ExtensionContext, tracks: Audi
     }
   }
 
-  setPlaybackStatus('$(unmute) Varterm playing — click to stop', 'playing');
+  setPlaybackStatus('$(debug-pause)', 'playing');
   logInfo(`Playing ${files.length} track(s) with /usr/bin/afplay`);
 
   try {
-    await playFilesWithAfplay(files);
+    await playFilesWithAfplay(files, startIndex);
   } finally {
-    if (playbackState === 'playing') {
+    if (
+      (playbackState === 'playing' || playbackState === 'paused') &&
+      playbackFiles === files
+    ) {
       setIdleStatus();
     }
     void pruneAudioCache(context);
   }
 }
 
-function playFilesWithAfplay(files: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let index = 0;
+function finishPlaylist(): void {
+  playbackProcess = undefined;
+  waitingForChunk = undefined;
+  playResolve?.();
+  playResolve = undefined;
+  playReject = undefined;
+  if (playbackState === 'playing' || playbackState === 'paused') {
+    setIdleStatus();
+  }
+}
 
-    const playNext = (): void => {
-      if (index >= files.length) {
-        playbackProcess = undefined;
-        resolve();
+function startChunk(index: number, generation: number): void {
+  if (generation !== playGeneration) {
+    return;
+  }
+  killPlaybackProcess();
+  if (index >= playbackFiles.length) {
+    if (playbackFiles.length < expectedTrackCount) {
+      waitingForChunk = index;
+      logInfo(`Waiting for chunk ${index + 1}/${expectedTrackCount}`);
+      return;
+    }
+    finishPlaylist();
+    return;
+  }
+  waitingForChunk = undefined;
+  playbackIndex = Math.max(0, index);
+  refreshTransport();
+  const filePath = playbackFiles[playbackIndex];
+  logInfo(`Start chunk ${playbackIndex + 1}/${expectedTrackCount || playbackFiles.length} ${filePath}`);
+  const child = spawn('/usr/bin/afplay', [filePath], {
+    stdio: 'ignore',
+    env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+  });
+  livePlayers.add(child);
+  playbackProcess = child;
+
+  child.on('error', (error) => {
+    livePlayers.delete(child);
+    if (generation !== playGeneration) {
+      return;
+    }
+    if (playbackProcess === child) {
+      playbackProcess = undefined;
+    }
+    playReject?.(error);
+    playResolve = undefined;
+    playReject = undefined;
+  });
+
+  child.on('close', (code, signal) => {
+    livePlayers.delete(child);
+    if (stoppedPlayers.has(child) || generation !== playGeneration || playbackProcess !== child) {
+      return;
+    }
+    playbackProcess = undefined;
+    if (code && code !== 0) {
+      playReject?.(new Error(`afplay exited with code ${code}${signal ? ` (${signal})` : ''}`));
+      playResolve = undefined;
+      playReject = undefined;
+      return;
+    }
+    startChunk(index + 1, generation);
+  });
+}
+
+function playFilesWithAfplay(files: string[], startIndex = 0): Promise<void> {
+  playGeneration += 1;
+  const generation = playGeneration;
+  playbackFiles = files;
+  return new Promise((resolve, reject) => {
+    playResolve = resolve;
+    playReject = reject;
+    startChunk(Math.max(0, Math.min(startIndex, files.length - 1)), generation);
+  });
+}
+
+async function jumpPlayback(delta: number): Promise<void> {
+  if (!playbackFiles.length) {
+    if (!latestPlayback?.tracks.length || !extensionContext) {
+      return;
+    }
+    const last = latestPlayback.tracks.length - 1;
+    const start = delta < 0 ? last : 0;
+    try {
+      await playTracksInCursor(extensionContext, latestPlayback.tracks, start);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Varterm: ${message}`);
+    }
+    return;
+  }
+
+  const from = playbackIndex;
+  const readyLast = playbackFiles.length - 1;
+  let next = from + delta;
+  if (next < 0) {
+    next = 0;
+  }
+
+  if (next > readyLast) {
+    if (playbackFiles.length < expectedTrackCount) {
+      const target = Math.min(next, expectedTrackCount - 1);
+      logInfo(`Jump +${delta}: wait for chunk ${target + 1}/${expectedTrackCount}`);
+      playGeneration += 1;
+      const generation = playGeneration;
+      playbackIndex = target;
+      waitingForChunk = target;
+      refreshTransport();
+      await killPlaybackProcessAsync();
+      if (generation !== playGeneration) {
         return;
       }
+      setPlaybackStatus('$(debug-pause)', 'playing');
+      refreshTransport();
+      return;
+    }
+    logInfo(`Jump +${delta} ignored: already at ${from + 1}/${playbackFiles.length}`);
+    return;
+  }
 
-      const filePath = files[index];
-      index += 1;
-      const child = spawn('/usr/bin/afplay', [filePath], {
-        stdio: 'ignore',
-        env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
-      });
-      playbackProcess = child;
-
-      child.on('error', (error) => {
-        if (playbackProcess === child) {
-          playbackProcess = undefined;
-        }
-        reject(error);
-      });
-
-      child.on('close', (code) => {
-        if (playbackProcess !== child) {
-          resolve();
-          return;
-        }
-        if (code && code !== 0) {
-          playbackProcess = undefined;
-          reject(new Error(`afplay exited with code ${code}`));
-          return;
-        }
-        playNext();
-      });
-    };
-
-    playNext();
-  });
+  playGeneration += 1;
+  const generation = playGeneration;
+  playbackIndex = next;
+  refreshTransport();
+  logInfo(`Jump ${from + 1} -> ${next + 1} of ${expectedTrackCount || playbackFiles.length}`);
+  await killPlaybackProcessAsync();
+  if (generation !== playGeneration) {
+    return;
+  }
+  setPlaybackStatus('$(debug-pause)', 'playing');
+  startChunk(next, generation);
 }
 
 type VoiceOption = {
@@ -841,17 +1086,20 @@ async function askAI(context: vscode.ExtensionContext): Promise<void> {
 async function readTextAloud(
   context: vscode.ExtensionContext,
   text: string,
-  label: string
+  label: string,
+  options?: { replace?: boolean }
 ): Promise<void> {
   logInfo(`readTextAloud start: label=${label}, chars=${text.length}`);
   if (isGeneratingAudio) {
-    const choice = await vscode.window.showWarningMessage(
-      'Varterm is still generating audio.',
-      'Cancel and start over',
-      'Wait'
-    );
-    if (choice !== 'Cancel and start over') {
-      return;
+    if (!options?.replace) {
+      const choice = await vscode.window.showWarningMessage(
+        'Varterm is still generating audio.',
+        'Cancel and start over',
+        'Wait'
+      );
+      if (choice !== 'Cancel and start over') {
+        return;
+      }
     }
     generationCts?.cancel();
     generationCts?.dispose();
@@ -869,7 +1117,7 @@ async function readTextAloud(
   isGeneratingAudio = true;
   generationCts = new vscode.CancellationTokenSource();
   const token = generationCts.token;
-  setPlaybackStatus('$(loading~spin) Varterm generating…', 'generating');
+  setPlaybackStatus('$(loading~spin)', 'generating');
   playerProvider?.post({ type: 'loading', label });
 
   try {
@@ -877,12 +1125,21 @@ async function readTextAloud(
     const selectedProvider =
       context.globalState.get<'edge' | 'premium'>(VOICE_PROVIDER_KEY) || settings.readAloudProvider;
 
-    // Keep chunks smaller for cloud generation to avoid long single-request timeouts.
-    const maxCharsPerTrack = selectedProvider === 'premium' ? 4500 : 12000;
-    const chunks = splitTextIntoChunks(normalized, maxCharsPerTrack);
+    // Paragraph-sized tracks so each jump forward skips one remaining part, not the whole reply.
+    const chunks = splitTextIntoChunks(normalized, 450);
+    expectedTrackCount = chunks.length;
+    waitingForChunk = undefined;
+    playbackFiles = [];
+    playbackIndex = 0;
     logInfo(`Using provider=${selectedProvider}, chunks=${chunks.length}`);
 
+    const outputDir = audioCacheDir(context);
+    await vscode.workspace.fs.createDirectory(outputDir);
+    const stamp = Date.now();
+    const files: string[] = [];
     const tracks: AudioTrack[] = [];
+    let playDone: Promise<void> | undefined;
+
     for (let i = 0; i < chunks.length; i += 1) {
       const chunkText = chunks[i];
       logInfo(`Generating chunk ${i + 1}/${chunks.length}, chars=${chunkText.length}`);
@@ -922,14 +1179,41 @@ async function readTextAloud(
         );
       }
 
+      const uri = vscode.Uri.joinPath(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(audioBytes));
+      const stat = await vscode.workspace.fs.stat(uri);
+      logInfo(`Audio file ${uri.fsPath} size=${stat.size}`);
+      if (stat.size < 100) {
+        throw new Error('Generated audio file was empty. Try again.');
+      }
+
       tracks.push({
         title: chunks.length === 1 ? label : `${label} (part ${i + 1}/${chunks.length})`,
         base64: Buffer.from(audioBytes).toString('base64'),
       });
+      files.push(uri.fsPath);
+      latestPlayback = { tracks: tracks.slice(), label };
+      playbackFiles = files;
+
+      if (waitingForChunk !== undefined && waitingForChunk < files.length) {
+        const resumeAt = waitingForChunk;
+        waitingForChunk = undefined;
+        startChunk(resumeAt, playGeneration);
+      }
+
+      if (!playDone) {
+        if (process.platform !== 'darwin') {
+          throw new Error('Background playback currently uses macOS afplay.');
+        }
+        setPlaybackStatus('$(debug-pause)', 'playing');
+        logInfo(`Playing first of ${chunks.length} track(s) while generating the rest`);
+        playDone = playFilesWithAfplay(files, 0);
+      } else {
+        refreshTransport();
+      }
     }
     logInfo(`Generated audio tracks: ${tracks.length}`);
 
-    latestPlayback = { tracks, label };
     playerProvider?.post({
       type: 'ready',
       tracks,
@@ -938,8 +1222,27 @@ async function readTextAloud(
       provider: selectedProvider,
     });
     isGeneratingAudio = false;
-    await playTracksInCursor(context, tracks);
+    if (playDone) {
+      try {
+        await playDone;
+      } finally {
+        if (
+          (playbackState === 'playing' || playbackState === 'paused') &&
+          playbackFiles === files
+        ) {
+          setIdleStatus();
+        }
+        void pruneAudioCache(context);
+      }
+    }
   } catch (error) {
+    expectedTrackCount = playbackFiles.length;
+    if (waitingForChunk !== undefined && waitingForChunk >= expectedTrackCount) {
+      waitingForChunk = undefined;
+      playResolve?.();
+      playResolve = undefined;
+      playReject = undefined;
+    }
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`readTextAloud error: ${message}`);
     setPlaybackStatus('$(error) Varterm failed — click to retry', 'idle');
@@ -1152,34 +1455,70 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
 }
 
 function splitTextIntoChunks(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) {
-    return [text];
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return [];
   }
 
+  const paragraphs = normalized.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
   const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = Math.min(start + maxChars, text.length);
-    let slice = text.slice(start, end);
-    if (end < text.length) {
-      const breakIndex = Math.max(slice.lastIndexOf('\n\n'), slice.lastIndexOf('. '), slice.lastIndexOf(' '));
-      if (breakIndex > Math.floor(maxChars * 0.5)) {
-        slice = slice.slice(0, breakIndex + 1);
+
+  const pushSized = (block: string) => {
+    if (block.length <= maxChars) {
+      chunks.push(block);
+      return;
+    }
+    let start = 0;
+    while (start < block.length) {
+      const end = Math.min(start + maxChars, block.length);
+      let slice = block.slice(start, end);
+      if (end < block.length) {
+        const breakIndex = Math.max(
+          slice.lastIndexOf('. '),
+          slice.lastIndexOf('? '),
+          slice.lastIndexOf('! '),
+          slice.lastIndexOf('\n'),
+          slice.lastIndexOf(' ')
+        );
+        if (breakIndex > Math.floor(maxChars * 0.35)) {
+          slice = slice.slice(0, breakIndex + 1);
+        }
       }
+      const piece = slice.trim();
+      if (piece) {
+        chunks.push(piece);
+      }
+      start += Math.max(1, slice.length);
     }
-    const finalChunk = slice.trim();
-    if (finalChunk) {
-      chunks.push(finalChunk);
+  };
+
+  let current = '';
+  for (const para of paragraphs) {
+    if (!current) {
+      current = para;
+      continue;
     }
-    start += Math.max(1, slice.length);
+    if (current.length + 2 + para.length <= 180) {
+      current = `${current}\n\n${para}`;
+      continue;
+    }
+    pushSized(current);
+    current = para;
+  }
+  if (current) {
+    pushSized(current);
   }
   return chunks;
 }
 
 async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<void> {
   if (playbackState === 'playing') {
-    stopHostPlayback();
-    setIdleStatus();
+    pauseHostPlayback();
+    return;
+  }
+
+  if (playbackState === 'paused') {
+    resumeHostPlayback();
     return;
   }
 
@@ -1192,12 +1531,44 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
+  const editor = vscode.window.activeTextEditor;
+  const selected = editor?.document.getText(editor.selection).trim() || '';
+  if (selected) {
+    await readTextAloud(context, selected, 'selection');
+    return;
+  }
+
   if (latestPlayback?.tracks.length) {
     await playTracksInCursor(context, latestPlayback.tracks);
     return;
   }
 
+  const lastAgent = readLastAgentText();
+  if (lastAgent) {
+    await readTextAloud(context, lastAgent, 'agent reply');
+    return;
+  }
+
   await readClipboardAloud(context);
+}
+
+async function maybeShowAutoReadTip(context: vscode.ExtensionContext): Promise<void> {
+  if (context.globalState.get<boolean>(AUTO_READ_TIP_KEY)) {
+    return;
+  }
+  if (getAutoReadEnabled(context) || getSettings().autoReadAgentOutput) {
+    await context.globalState.update(AUTO_READ_TIP_KEY, true);
+    return;
+  }
+  const choice = await vscode.window.showInformationMessage(
+    'Turn on Varterm Auto-read to hear assistant replies when they finish. Pause, replay, or stop from the status bar.',
+    'Turn on Auto-read',
+    'Not now'
+  );
+  await context.globalState.update(AUTO_READ_TIP_KEY, true);
+  if (choice === 'Turn on Auto-read') {
+    await setAutoReadEnabled(context, true);
+  }
 }
 
 async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> {
@@ -1242,6 +1613,23 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(autoReadStatusBar);
   setAutoReadStatus(getAutoReadEnabled(context) || getSettings().autoReadAgentOutput);
 
+  jumpBackBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 81);
+  jumpBackBar.command = 'vartermCursor.jumpBack';
+  context.subscriptions.push(jumpBackBar);
+
+  stopStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 78);
+  stopStatusBar.command = 'vartermCursor.stopPlayback';
+  context.subscriptions.push(stopStatusBar);
+
+  jumpForwardBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 77);
+  jumpForwardBar.command = 'vartermCursor.jumpForward';
+  context.subscriptions.push(jumpForwardBar);
+
+  replayBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 76);
+  replayBar.command = 'vartermCursor.replayLast';
+  context.subscriptions.push(replayBar);
+  refreshTransport();
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration('vartermCursor.autoReadAgentOutput')) {
@@ -1280,6 +1668,13 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.selectReadAloudVoice', () => selectReadAloudVoice(context));
   register('vartermCursor.readEditorAloud', () => readEditorAloud(context));
   register('vartermCursor.readClipboardAloud', () => readClipboardAloud(context));
+  register('vartermCursor.readLastAgentReply', async () => {
+    const text = readLastAgentText();
+    if (!text) {
+      throw new Error('No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.');
+    }
+    await readTextAloud(context, text, 'agent reply');
+  });
   register('vartermCursor.openSettings', () => openSettings());
   register('vartermCursor.openKeyboardShortcuts', () => openKeyboardShortcuts());
   register('vartermCursor.clearAudioCache', () => clearAudioCache(context));
@@ -1287,12 +1682,35 @@ export function activate(context: vscode.ExtensionContext): void {
     stopHostPlayback();
     setIdleStatus();
   });
+  register('vartermCursor.pausePlayback', async () => {
+    if (!pauseHostPlayback()) {
+      throw new Error('Nothing is playing.');
+    }
+  });
+  register('vartermCursor.resumePlayback', async () => {
+    if (!resumeHostPlayback()) {
+      throw new Error('Nothing is paused.');
+    }
+  });
+  register('vartermCursor.replayLast', async () => {
+    if (!latestPlayback?.tracks.length) {
+      throw new Error('No audio to replay yet.');
+    }
+    await playTracksInCursor(context, latestPlayback.tracks);
+  });
+  register('vartermCursor.jumpBack', async () => {
+    await jumpPlayback(-1);
+  });
+  register('vartermCursor.jumpForward', async () => {
+    await jumpPlayback(1);
+  });
   register('vartermCursor.statusBarAction', () => handleStatusBarAction(context));
   register('vartermCursor.toggleAutoRead', () => toggleAutoRead(context));
   register('vartermCursor.saveLastAudio', () => saveLatestAudio());
 
   void pruneAudioCache(context);
   void maybeShowShortcutsTip(context);
+  void maybeShowAutoReadTip(context);
   if (getAutoReadEnabled(context) || getSettings().autoReadAgentOutput) {
     void setAutoReadEnabled(context, true);
   }

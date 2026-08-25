@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 export const AUTO_READ_KEY = 'vartermCursor.autoReadAgentOutput';
-const HOOK_COMMAND = './hooks/varterm-autoread.py';
+const RELATIVE_HOOK_COMMAND = './hooks/varterm-autoread.py';
 
 type AgentDrop = { text?: string; ts?: number };
 
@@ -39,11 +39,20 @@ export async function installVartermAgentHook(extensionPath: string): Promise<vo
   existing.version = existing.version || 1;
   existing.hooks = existing.hooks || {};
   const current = existing.hooks.afterAgentResponse || [];
-  if (!current.some((hook) => hook.command === HOOK_COMMAND)) {
-    existing.hooks.afterAgentResponse = [...current, { command: HOOK_COMMAND }];
-  }
+  const ours = new Set([RELATIVE_HOOK_COMMAND, destScript]);
+  const kept = current.filter((hook) => !ours.has(hook.command || ''));
+  existing.hooks.afterAgentResponse = [...kept, { command: destScript }];
 
   await fs.promises.writeFile(hooksJsonPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
+}
+
+export function readLastAgentText(): string {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(agentDropPath(), 'utf8')) as AgentDrop;
+    return stripForSpeech(parsed.text || '');
+  } catch {
+    return '';
+  }
 }
 
 export function stripForSpeech(text: string): string {
@@ -61,6 +70,8 @@ export function watchAgentDropFile(
   log: (message: string) => void
 ): { dispose: () => void } {
   const filePath = agentDropPath();
+  const dirPath = path.dirname(filePath);
+  fs.mkdirSync(dirPath, { recursive: true });
   let lastTs = 0;
   let debounce: ReturnType<typeof setTimeout> | undefined;
 
@@ -93,7 +104,7 @@ export function watchAgentDropFile(
     }, 250);
   };
 
-  const watcher = fs.watch(path.dirname(filePath), (event, filename) => {
+  const watcher = fs.watch(dirPath, (event, filename) => {
     if (!filename || filename.toString() !== 'varterm-last-agent.json') {
       return;
     }

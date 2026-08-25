@@ -1,6 +1,14 @@
 # Varterm TTS
 
-Convert long-form text to natural speech in VS Code, with markdown cleanup for selected text, editor content, and clipboard. Free to use with no login required.
+Read the agent window, editor, selection, and clipboard aloud. Turn on **Auto-read** to hear finished assistant replies. Play, pause, stop, and jump from the status bar. Free, no login.
+
+## Install
+
+In VS Code, open Extensions, search **Varterm TTS**, and click Install. Same search works in other compatible editors that use Open VSX.
+
+Optional: download the latest `varterm-cursor-*.vsix` from [GitHub Releases](https://github.com/varterm/extensions/releases) and run `Extensions: Install from VSIX...`.
+
+Site and extra setup: [varterm.com/extensions](https://varterm.com/extensions).
 
 ## Commands
 
@@ -9,6 +17,10 @@ Convert long-form text to natural speech in VS Code, with markdown cleanup for s
 - `Varterm: Select Read-Aloud Voice` - pick from available Edge/Premium voices.
 - `Varterm: Read Editor/Selection Aloud` — synthesize active selection (or full editor text) and play audio.
 - `Varterm: Read Clipboard Aloud` — speak copied text.
+- `Varterm: Toggle Auto-Read` — play finished assistant replies from the status bar.
+- `Varterm: Read Last Agent Reply` — speak the last captured assistant reply again.
+- `Varterm: Pause Playback` / `Varterm: Resume Playback` / `Varterm: Stop Playback`.
+- `Varterm: Replay Last Audio` — play the last generated audio from the start.
 - `Varterm: Customize Keyboard Shortcuts` — change or remove Varterm key bindings.
 - `Varterm: Open Settings` — open all `vartermCursor.*` settings.
 - `Varterm: Clear Audio Cache` — remove leftover MP3s from older versions.
@@ -27,8 +39,8 @@ To change or remove shortcuts: run **`Varterm: Customize Keyboard Shortcuts`**.
 
 Player notes:
 - On macOS, audio plays in the background with `afplay`. You stay in the editor — no Music.app, no extra tab.
-- Status bar **Play** control: click to read the clipboard, replay, or stop.
-- Status bar **Auto-read**: click to play new assistant replies when they finish.
+- Status bar **Auto-read**: click once to turn on. When an assistant reply **finishes**, that reply plays. Selecting text in the chat panel is not a source — the hook captures the finished reply.
+- Status bar while playing: **Pause**, **Stop**, **Replay**, and **jump** arrows. Mash jump to skip back or forward through chunks.
 
 ## Settings
 
@@ -42,16 +54,13 @@ You can tune behavior in Settings under `vartermCursor.*`:
 - `vartermCursor.elevenLabsApiKey` (optional plain-text fallback; secure storage command is preferred)
 - `vartermCursor.maxCachedAudioFiles` (temporary files; default 8)
 - `vartermCursor.maxCachedAudioAgeHours` (default 24; `0` = keep until count limit)
+- `vartermCursor.autoReadAgentOutput` — same as the Auto-read status bar toggle
 
 ## Development
 
 ```bash
 npm install
 npm run build
-```
-
-Package VSIX:
-
-```bash
 npm run package
 ```
+
