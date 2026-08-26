@@ -7,3 +7,6 @@ extensions/chrome/dist
 extensions/chrome/*.zip
 .env.publish
 extensions/vscode/.env.publish
+*.pem
+*.key
+.DS_Store

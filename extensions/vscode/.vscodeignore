@@ -2,3 +2,17 @@ src/**
 tsconfig.json
 *.map
 .gitignore
+
+# Never package credentials. .gitignore keeps these out of git but says nothing
+# about the VSIX, and vsce packages the extension folder wholesale, so without
+# this a publishing token ships inside the extension.
+.env
+.env.*
+*.pem
+*.key
+
+assets/varterm-icons.svg
+scripts/build-icon-font.mjs
+scripts/preview-icon-font.html
+scripts/publish-stores.sh
+scripts/store-status.mjs

@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Agent Auto-read speaks your agent's replies. One install, every window, zero echo. Play, pause, stop, jump from the status bar.",
-  "version": "0.1.38",
+  "version": "0.1.40",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -249,17 +249,92 @@
           "type": "boolean",
           "default": true,
           "description": "Show a small animated meter between Play and Auto-read while this window is playing audio."
+        },
+        "vartermCursor.resumeRewindMs": {
+          "type": "number",
+          "default": 600,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "How far to rewind when resuming after a pause, in milliseconds. A small overlap makes sure no words are lost at the join."
+        }
+      }
+    },
+    "icons": {
+      "varterm-bars-0": {
+        "description": "Varterm waveform, playing frame 0",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E000"
+        }
+      },
+      "varterm-bars-1": {
+        "description": "Varterm waveform, playing frame 1",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E001"
+        }
+      },
+      "varterm-bars-2": {
+        "description": "Varterm waveform, playing frame 2",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E002"
+        }
+      },
+      "varterm-bars-3": {
+        "description": "Varterm waveform, playing frame 3",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E003"
+        }
+      },
+      "varterm-bars-4": {
+        "description": "Varterm waveform, playing frame 4",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E004"
+        }
+      },
+      "varterm-bars-5": {
+        "description": "Varterm waveform, playing frame 5",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E005"
+        }
+      },
+      "varterm-bars-6": {
+        "description": "Varterm waveform, playing frame 6",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E006"
+        }
+      },
+      "varterm-bars-7": {
+        "description": "Varterm waveform, playing frame 7",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E007"
+        }
+      },
+      "varterm-bars-idle": {
+        "description": "Varterm waveform, paused",
+        "default": {
+          "fontPath": "assets/varterm-icons.ttf",
+          "fontCharacter": "\\E008"
         }
       }
     }
   },
   "scripts": {
-    "build": "tsc -p .",
+    "build": "node scripts/build-icon-font.mjs && tsc -p .",
+    "icons": "node scripts/build-icon-font.mjs",
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
     "package": "npm run build && npx @vscode/vsce package --follow-symlinks",
     "publish:stores": "bash scripts/publish-stores.sh",
+    "publish:ovsx": "bash scripts/publish-stores.sh --only-ovsx",
     "publish:dry-run": "bash scripts/publish-stores.sh --dry-run",
+    "publish:dry-run:ovsx": "bash scripts/publish-stores.sh --only-ovsx --dry-run",
     "stores:status": "node scripts/store-status.mjs"
   },
   "keywords": [
@@ -283,6 +358,7 @@
     "@types/node": "^25.6.0",
     "@types/vscode": "^1.105.0",
     "@vscode/vsce": "^3.9.1",
+    "svg2ttf": "^6.1.0",
     "typescript": "^6.0.3"
   }
 }

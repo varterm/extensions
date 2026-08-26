@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- Throwaway harness: renders the generated glyphs through the real font file
+     at status bar size so the frames can be eyeballed before packaging. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face {
+        font-family: 'varterm-icons';
+        src: url('../assets/varterm-icons.ttf') format('truetype');
+      }
+      /* Real codicon font, for judging relative size against built-in icons. */
+      @font-face {
+        font-family: 'codicon';
+        src: url('/Applications/Cursor.app/Contents/Resources/app/out/media/codicon.ttf') format('truetype');
+      }
+      .codicon {
+        font-family: 'codicon';
+        font-size: 16px;
+        line-height: 1;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #1f1f1f;
+        color: #cccccc;
+        font-family: -apple-system, sans-serif;
+      }
+      .label {
+        font-size: 11px;
+        opacity: 0.6;
+        margin: 18px 0 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .statusbar {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: #181818;
+        border: 1px solid #2b2b2b;
+        padding: 0 12px;
+        height: 22px;
+        font-size: 12px;
+      }
+      .icon {
+        font-family: 'varterm-icons';
+        font-size: 16px;
+        line-height: 1;
+        color: #10b981;
+      }
+      .big {
+        font-family: 'varterm-icons';
+        font-size: 72px;
+        line-height: 1;
+        color: #10b981;
+      }
+      .paused {
+        color: #8a8a8a;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="label">Frames at 16px, inline in a status bar</div>
+    <div class="statusbar">
+      <span>Play</span>
+      <span class="icon">&#xE000;</span>
+      <span class="icon">&#xE001;</span>
+      <span class="icon">&#xE002;</span>
+      <span class="icon">&#xE003;</span>
+      <span class="icon">&#xE004;</span>
+      <span class="icon">&#xE005;</span>
+      <span class="icon">&#xE006;</span>
+      <span class="icon">&#xE007;</span>
+      <span class="icon paused">&#xE008;</span>
+      <span>Auto-read</span>
+    </div>
+
+    <div class="label">Next to real codicons at the same 16px, transport order</div>
+    <div class="statusbar">
+      <span class="codicon">&#xEAE4;</span><span class="codicon">&#xEAD3;</span
+      ><span class="codicon">&#xEAD7;</span><span class="codicon">&#xEAA0;</span
+      ><span class="codicon">&#xEB37;</span><span class="icon">&#xE002;</span
+      ><span class="codicon">&#xEAB8;</span><span>Auto-read on</span>
+    </div>
+
+    <div class="label">Single frame in context, playing then paused</div>
+    <div class="statusbar"><span>Play</span><span class="icon">&#xE002;</span><span>Auto-read</span></div>
+    <span style="display: inline-block; width: 12px"></span>
+    <div class="statusbar"><span>Play</span><span class="icon paused">&#xE008;</span><span>Auto-read</span></div>
+
+    <div class="label">Frames enlarged</div>
+    <div>
+      <span class="big">&#xE000;</span><span class="big">&#xE001;</span><span class="big">&#xE002;</span
+      ><span class="big">&#xE003;</span>
+    </div>
+    <div>
+      <span class="big">&#xE004;</span><span class="big">&#xE005;</span><span class="big">&#xE006;</span
+      ><span class="big">&#xE007;</span>
+    </div>
+
+    <div class="label">Paused / idle glyph, enlarged (should match the logo)</div>
+    <div><span class="big paused">&#xE008;</span></div>
+  </body>
+</html>

@@ -1,6 +1,16 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import * as vscode from 'vscode';
 import { createTtsHttpClient } from '@varterm/tts-client';
+import { sliceMp3FromMs } from './mp3';
+import {
+  claimPlayback,
+  ownedByAnotherWindow,
+  readPlaybackOwner,
+  releasePlayback,
+  watchPlaybackLock,
+  type PlaybackOwner,
+} from './playback-lock';
 import { PLAYER_VIEW_ID, VartermPlayerViewProvider } from './player-view';
 import {
   AUTO_READ_KEY,
@@ -70,6 +80,7 @@ type ExtensionSettings = {
   maxCachedAudioFiles: number;
   maxCachedAudioAgeHours: number;
   showPlayingIndicator: boolean;
+  resumeRewindMs: number;
 };
 
 type AudioTrack = { title: string; base64: string };
@@ -85,6 +96,12 @@ let playbackState: 'idle' | 'generating' | 'playing' | 'paused' = 'idle';
 let playbackFiles: string[] = [];
 let playbackIndex = 0;
 let playGeneration = 0;
+// Where the running afplay started inside the current part, and when it was
+// spawned. Together they give the play position, which pause has to record
+// because afplay is killed rather than suspended.
+let chunkOffsetMs = 0;
+let chunkStartedAt = 0;
+let pausedOffsetMs: number | undefined;
 let expectedTrackCount = 0;
 let waitingForChunk: number | undefined;
 let playResolve: (() => void) | undefined;
@@ -99,6 +116,10 @@ let playingIndicator: vscode.StatusBarItem | undefined;
 let indicatorTimer: ReturnType<typeof setInterval> | undefined;
 let indicatorFrame = 0;
 let autoReadWatcher: { dispose: () => void } | undefined;
+let playbackLockWatcher: { dispose: () => void } | undefined;
+// Another Cursor window that currently holds playback, so this window can show
+// what is going on instead of looking idle.
+let otherWindow: PlaybackOwner | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 
@@ -113,11 +134,19 @@ function logInfo(message: string): void {
   getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
 }
 
-// Compact 3-bar take on the 5-capsule logo (short–tall–short). Taller glyphs
-// read as vertical lines; three cells is tighter than a five-bar copy.
-const INDICATOR_FRAMES = ['▃▇▃', '▂█▄', '▄▇▂', '▃▆▃', '▂▇▃', '▄█▃'];
-const INDICATOR_PAUSED = '▂▅▂';
-const INDICATOR_INTERVAL_MS = 220;
+// The indicator is the logo mark itself, shipped as a contributed icon font
+// (assets/varterm-icons.ttf) with one glyph per animation frame. No text glyph
+// can draw it: braille varies in height but is dotted, and the block elements
+// are solid but fill a whole cell as thick slabs. The font draws five solid
+// capsules that grow out from a shared centre line, same as the logo.
+// Frame count must match FRAME_COUNT in scripts/build-icon-font.mjs.
+const INDICATOR_FRAME_COUNT = 8;
+const INDICATOR_FRAMES = Array.from(
+  { length: INDICATOR_FRAME_COUNT },
+  (_unused, frame) => `$(varterm-bars-${frame})`,
+);
+const INDICATOR_PAUSED = '$(varterm-bars-idle)';
+const INDICATOR_INTERVAL_MS = 120;
 
 function playbackPositionLabel(): string {
   const total = expectedTrackCount || playbackFiles.length || latestPlayback?.tracks.length || 0;
@@ -168,6 +197,19 @@ function refreshPlayingIndicator(): void {
     return;
   }
 
+  // Nothing playing here, but another window has the audio. Show the mark
+  // static and dimmed so this window does not look idle while Varterm talks.
+  if (otherWindow) {
+    playingIndicator.text = INDICATOR_PAUSED;
+    playingIndicator.tooltip =
+      otherWindow.state === 'paused'
+        ? 'Varterm is paused in another Cursor window. Press Play to move it here.'
+        : 'Varterm is playing in another Cursor window. Press Play to move it here.';
+    playingIndicator.color = new vscode.ThemeColor('descriptionForeground');
+    playingIndicator.show();
+    return;
+  }
+
   playingIndicator.hide();
 }
 
@@ -185,6 +227,9 @@ function refreshTransport(): void {
     } else if (playbackState === 'generating') {
       statusBar.text = '$(loading~spin)';
       statusBar.tooltip = 'Cancel';
+    } else if (otherWindow) {
+      statusBar.text = '$(play)';
+      statusBar.tooltip = 'Play here — stops the Cursor window that is playing now';
     } else {
       statusBar.text = '$(play)';
       statusBar.tooltip = 'Play';
@@ -236,8 +281,41 @@ function refreshTransport(): void {
   refreshPlayingIndicator();
 }
 
+// Advertise to the other Cursor windows whether this one holds the audio, so
+// their Play button can hand over instead of starting a second, overlapping
+// read of the same reply.
+function publishPlaybackOwnership(): void {
+  if (playbackState === 'playing' || playbackState === 'paused') {
+    otherWindow = undefined;
+    claimPlayback(playbackState, latestPlayback?.label || 'audio');
+    return;
+  }
+  releasePlayback();
+}
+
+function handlePlaybackLockChange(): void {
+  const owner = readPlaybackOwner();
+  const foreign = ownedByAnotherWindow(owner) ? owner : undefined;
+  const changed = foreign?.pid !== otherWindow?.pid || foreign?.state !== otherWindow?.state;
+  otherWindow = foreign;
+
+  // Last window to start playing wins. Whoever was playing before steps aside
+  // rather than talking over the new owner.
+  if (foreign && (playbackState === 'playing' || playbackState === 'paused')) {
+    logInfo(`Playback moved to another Cursor window (pid ${foreign.pid}); stopping here`);
+    stopHostPlayback();
+    setIdleStatus();
+    return;
+  }
+
+  if (changed) {
+    refreshTransport();
+  }
+}
+
 function setPlaybackStatus(_text: string, state: typeof playbackState = playbackState): void {
   playbackState = state;
+  publishPlaybackOwnership();
   refreshTransport();
 }
 
@@ -374,35 +452,45 @@ function killPlaybackProcessAsync(): Promise<void> {
 function stopHostPlayback(): void {
   playGeneration += 1;
   waitingForChunk = undefined;
+  pausedOffsetMs = undefined;
+  chunkStartedAt = 0;
+  chunkOffsetMs = 0;
   killPlaybackProcess();
   playResolve?.();
   playResolve = undefined;
   playReject = undefined;
 }
 
+function currentChunkPositionMs(): number {
+  if (!chunkStartedAt) {
+    return 0;
+  }
+  return chunkOffsetMs + (Date.now() - chunkStartedAt);
+}
+
+// afplay cannot be paused. It hands the clip straight to CoreAudio, so SIGSTOP
+// freezes the process while the sound plays on, and the audio that elapses
+// while suspended is simply lost. Pause therefore kills the player exactly like
+// stop does, and remembers the position so resume can pick it back up.
 function pauseHostPlayback(): boolean {
   if (!playbackProcess || playbackState !== 'playing') {
     return false;
   }
-  try {
-    playbackProcess.kill('SIGSTOP');
-  } catch {
-    return false;
-  }
+  pausedOffsetMs = Math.max(0, currentChunkPositionMs() - getSettings().resumeRewindMs);
+  killPlaybackProcess();
+  chunkStartedAt = 0;
+  logInfo(`Paused at ${(pausedOffsetMs / 1000).toFixed(1)}s of part ${playbackIndex + 1}`);
   setPlaybackStatus('$(play)', 'paused');
   return true;
 }
 
 function resumeHostPlayback(): boolean {
-  if (!playbackProcess || playbackState !== 'paused') {
+  if (playbackState !== 'paused' || !playbackFiles.length) {
     return false;
   }
-  try {
-    playbackProcess.kill('SIGCONT');
-  } catch {
-    return false;
-  }
+  const offsetMs = pausedOffsetMs ?? 0;
   setPlaybackStatus('$(debug-pause)', 'playing');
+  startChunk(playbackIndex, playGeneration, offsetMs);
   return true;
 }
 
@@ -464,7 +552,27 @@ function finishPlaylist(): void {
   }
 }
 
-function startChunk(index: number, generation: number): void {
+// A copy of `filePath` with everything before `offsetMs` dropped, so afplay can
+// start part-way in without a seek flag. Falls back to the untrimmed file, and
+// therefore to replaying the part, if the MP3 cannot be cut.
+function trimmedResumeFile(filePath: string, offsetMs: number): { path: string; offsetMs: number } {
+  try {
+    const data = readFileSync(filePath);
+    const remainder = sliceMp3FromMs(data, offsetMs);
+    if (!remainder.length || remainder.length === data.length) {
+      return { path: filePath, offsetMs: 0 };
+    }
+    const path = `${filePath.replace(/\.mp3$/, '')}-resume.mp3`;
+    writeFileSync(path, remainder);
+    return { path, offsetMs };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logInfo(`Could not trim for resume, replaying the part instead: ${message}`);
+    return { path: filePath, offsetMs: 0 };
+  }
+}
+
+function startChunk(index: number, generation: number, offsetMs = 0): void {
   if (generation !== playGeneration) {
     return;
   }
@@ -479,11 +587,19 @@ function startChunk(index: number, generation: number): void {
     return;
   }
   waitingForChunk = undefined;
+  pausedOffsetMs = undefined;
   playbackIndex = Math.max(0, index);
   refreshTransport();
   const filePath = playbackFiles[playbackIndex];
-  logInfo(`Start chunk ${playbackIndex + 1}/${expectedTrackCount || playbackFiles.length} ${filePath}`);
-  const child = spawn('/usr/bin/afplay', [filePath], {
+  const resume =
+    offsetMs > 0 ? trimmedResumeFile(filePath, offsetMs) : { path: filePath, offsetMs: 0 };
+  chunkOffsetMs = resume.offsetMs;
+  chunkStartedAt = Date.now();
+  const from = resume.offsetMs ? ` from ${(resume.offsetMs / 1000).toFixed(1)}s` : '';
+  logInfo(
+    `Start chunk ${playbackIndex + 1}/${expectedTrackCount || playbackFiles.length}${from} ${resume.path}`
+  );
+  const child = spawn('/usr/bin/afplay', [resume.path], {
     stdio: 'ignore',
     env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
   });
@@ -620,6 +736,7 @@ function getSettings(): ExtensionSettings {
     maxCachedAudioFiles: config.get<number>('maxCachedAudioFiles', 8),
     maxCachedAudioAgeHours: config.get<number>('maxCachedAudioAgeHours', 24),
     showPlayingIndicator: config.get<boolean>('showPlayingIndicator', true),
+    resumeRewindMs: config.get<number>('resumeRewindMs', 600),
   };
 }
 
@@ -1686,36 +1803,64 @@ async function readClipboardAloud(context: vscode.ExtensionContext): Promise<voi
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
-  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 80);
+
+  // Left-aligned status bar items render highest priority first, so these
+  // descend in the order they should appear. Keeping them contiguous matters:
+  // the Auto-read label used to sit at 79, between the meter and Stop, which
+  // split the transport into two halves with a word wedged in the middle.
+  //
+  //   jump back | play/pause | stop | jump forward | replay | meter | Auto-read
+  const ORDER = {
+    jumpBack: 90,
+    playPause: 89,
+    stop: 88,
+    jumpForward: 87,
+    replay: 86,
+    meter: 85,
+    autoRead: 84,
+  };
+
+  jumpBackBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.jumpBack);
+  jumpBackBar.command = 'vartermCursor.jumpBack';
+  context.subscriptions.push(jumpBackBar);
+
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.playPause);
   statusBar.show();
   context.subscriptions.push(statusBar);
   setIdleStatus();
 
-  autoReadStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 79);
+  stopStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.stop);
+  stopStatusBar.command = 'vartermCursor.stopPlayback';
+  context.subscriptions.push(stopStatusBar);
+
+  jumpForwardBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    ORDER.jumpForward
+  );
+  jumpForwardBar.command = 'vartermCursor.jumpForward';
+  context.subscriptions.push(jumpForwardBar);
+
+  replayBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.replay);
+  replayBar.command = 'vartermCursor.replayLast';
+  context.subscriptions.push(replayBar);
+
+  playingIndicator = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.meter);
+  playingIndicator.command = 'vartermCursor.statusBarAction';
+  context.subscriptions.push(playingIndicator);
+  context.subscriptions.push({ dispose: stopIndicatorAnimation });
+
+  autoReadStatusBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    ORDER.autoRead
+  );
   autoReadStatusBar.command = 'vartermCursor.toggleAutoRead';
   context.subscriptions.push(autoReadStatusBar);
   setAutoReadStatus(getAutoReadEnabled(context) || getSettings().autoReadAgentOutput);
 
-  jumpBackBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 81);
-  jumpBackBar.command = 'vartermCursor.jumpBack';
-  context.subscriptions.push(jumpBackBar);
+  playbackLockWatcher = watchPlaybackLock(handlePlaybackLockChange);
+  context.subscriptions.push({ dispose: () => playbackLockWatcher?.dispose() });
+  handlePlaybackLockChange();
 
-  stopStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 78);
-  stopStatusBar.command = 'vartermCursor.stopPlayback';
-  context.subscriptions.push(stopStatusBar);
-
-  jumpForwardBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 77);
-  jumpForwardBar.command = 'vartermCursor.jumpForward';
-  context.subscriptions.push(jumpForwardBar);
-
-  replayBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 76);
-  replayBar.command = 'vartermCursor.replayLast';
-  context.subscriptions.push(replayBar);
-
-  playingIndicator = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 79.5);
-  playingIndicator.command = 'vartermCursor.statusBarAction';
-  context.subscriptions.push(playingIndicator);
-  context.subscriptions.push({ dispose: stopIndicatorAnimation });
   refreshTransport();
 
   context.subscriptions.push(
@@ -1809,6 +1954,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   autoReadWatcher?.dispose();
+  playbackLockWatcher?.dispose();
   stopIndicatorAnimation();
   stopHostPlayback();
+  releasePlayback();
 }

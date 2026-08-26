@@ -18,10 +18,10 @@ Click **Auto-read** in the status bar. When an agent reply **finishes**, it play
 
 It changes the loop: send the prompt, go back to your file, and let the answer come to you. No parking on the chat panel watching tokens stream, no scrolling back up to find the one line that mattered — jump back and hear it again.
 
-- One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other.
+- One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other. Other windows show the mark dimmed while another one is talking, and pressing Play there moves playback over instead of starting a second copy.
 - Playback stays in the editor. On macOS it runs through `afplay` — no Music.app, no extra tab.
 - Transport is icon-only while playing: jump back, pause, stop, jump forward, replay.
-- A compact 3-bar meter (the logo’s vertical capsules) animates between Play and Auto-read so you can spot the window that is talking. It flattens when paused and vanishes when idle.
+- The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
 - Chat selections are not readable (webview). Auto-read captures the finished reply instead.
 
@@ -63,6 +63,7 @@ Everything lives under `vartermCursor.*`:
 - `readAloudVoice`, `readAloudRate`, `readAloudProvider` — voice, speed, Edge or Premium.
 - `autoReadAgentOutput` — same as the status bar toggle.
 - `showPlayingIndicator` — the animated meter in the status bar (default on).
+- `resumeRewindMs` — how far resume rewinds after a pause (default 600ms) so no words are lost at the join.
 - `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
 - `requestTimeoutMs`, `requestRetries` — for very long passages.
 - `elevenLabsApiKey` — plain-text fallback; the secure command is preferred.

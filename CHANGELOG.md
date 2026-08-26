@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.40 - 2026-08-25
+
+### Security
+- `.vscodeignore` now excludes `.env*`, `*.pem` and `*.key`. `.gitignore` keeps credentials out of git but says nothing about the VSIX, and `vsce` packages the extension folder wholesale, so a publishing token stored next to `package.json` was being built into the extension. The publish script also refuses to upload a VSIX containing credential-looking files, and credentials should now live in `~/.varterm-publish.env`, outside the packaged folder.
+
+### Added
+- `npm run publish:ovsx` releases to Open VSX on its own. Credentials are now only required for the stores actually being published, so Cursor users can be shipped to without an Azure DevOps token, leaving the Marketplace listing to a manual VSIX upload.
+
+### Fixed
+- **Pause actually pauses.** Suspending `afplay` never stopped the sound, because the clip is already handed to CoreAudio, so audio kept playing and was lost. Pause now stops the player and remembers the position; resume picks up where it left off with a small rewind.
+
+### Changed
+- The playing meter is the logo mark itself now: five solid capsules growing out from a centre line, shipped as an icon font so the bars are solid strokes instead of braille dots.
+
+## 0.1.39 - 2026-08-25
+
+### Changed
+- Playing meter sits between Play and Auto-read, and is now five bars in the logo's silhouette with a wave running through them. Install this VSIX and reload to see it.
+
 ## 0.1.38 - 2026-08-25
 
 ### Added

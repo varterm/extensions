@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.40 - 2026-08-25
+
+### Fixed
+- **No more overlapping reads across windows.** Auto-read is claimed by one window, so every other window looked idle: its status bar still showed Play, and pressing it read the same reply a second time on top of the window already speaking. Windows now share who holds the audio. The others show the mark dimmed with "playing in another Cursor window", and pressing Play moves playback to the window you pressed it in rather than starting a second copy.
+- **Pause actually pauses.** It used to suspend `afplay` with `SIGSTOP`, which does not stop the sound: `afplay` hands the clip to CoreAudio, so the audio played on while the process was frozen and whatever elapsed during the pause was lost. Pause now stops the player and remembers the position, and resume trims the part to that point and plays the remainder. Resume rewinds 600ms by default so nothing is clipped at the join; tune it with `vartermCursor.resumeRewindMs`.
+
+### Changed
+- The playing meter is now the logo mark itself: five solid capsules that grow out from a shared centre line. It ships as an icon font contributed by the extension, so the bars are solid strokes rather than braille dots, and every frame keeps the logo's tall-middle silhouette. Eight frames at 120ms, with a static logo mark when paused.
+- The meter fills the icon box, so it reads a little taller than the surrounding status bar icons instead of sitting at 80% of the available height.
+- Transport controls are grouped: jump back, play/pause, stop, jump forward, replay, meter, then the Auto-read toggle. Stop and the jump arrows used to be scattered around the Auto-read label, which split the controls into two halves.
+
+## 0.1.39 - 2026-08-25
+
+### Changed
+- Playing meter sits between Play and Auto-read (reload after installing this VSIX).
+- The meter is now five bars in the logo's silhouette with a wave running through them, at 140ms a frame. The earlier three-bar version only moved its middle glyph, so it read as one bar twitching instead of the mark equalizing.
+
 ## 0.1.38 - 2026-08-25
 
 ### Added
