@@ -192,11 +192,26 @@ function setAutoReadStatus(enabled: boolean): void {
   autoReadStatusBar.show();
 }
 
-async function setAutoReadEnabled(context: vscode.ExtensionContext, enabled: boolean): Promise<void> {
+async function tryUpdateUserSetting(key: string, value: unknown): Promise<void> {
+  try {
+    await vscode.workspace
+      .getConfiguration('vartermCursor')
+      .update(key, value, vscode.ConfigurationTarget.Global);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logInfo(`Could not write user setting ${key}: ${message}`);
+  }
+}
+
+async function setAutoReadEnabled(
+  context: vscode.ExtensionContext,
+  enabled: boolean,
+  options?: { persistSettings?: boolean }
+): Promise<void> {
   await context.globalState.update(AUTO_READ_KEY, enabled);
-  await vscode.workspace
-    .getConfiguration('vartermCursor')
-    .update('autoReadAgentOutput', enabled, vscode.ConfigurationTarget.Global);
+  if (options?.persistSettings !== false) {
+    await tryUpdateUserSetting('autoReadAgentOutput', enabled);
+  }
   setAutoReadStatus(enabled);
 
   autoReadWatcher?.dispose();
@@ -207,7 +222,12 @@ async function setAutoReadEnabled(context: vscode.ExtensionContext, enabled: boo
     return;
   }
 
-  await installVartermAgentHook(context.extensionPath);
+  try {
+    await installVartermAgentHook(context.extensionPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logInfo(`Hook install skipped: ${message}`);
+  }
   autoReadWatcher = watchAgentDropFile((text) => {
     void readTextAloud(context, text, 'agent reply', { replace: true }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -1421,9 +1441,7 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
 
         if (message?.type === 'setProvider') {
           const provider = message.value === 'premium' ? 'premium' : 'edge';
-          await vscode.workspace
-            .getConfiguration('vartermCursor')
-            .update('readAloudProvider', provider, vscode.ConfigurationTarget.Global);
+          await tryUpdateUserSetting('readAloudProvider', provider);
           await context.globalState.update(VOICE_PROVIDER_KEY, provider);
           return;
         }
@@ -1712,7 +1730,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void maybeShowShortcutsTip(context);
   void maybeShowAutoReadTip(context);
   if (getAutoReadEnabled(context) || getSettings().autoReadAgentOutput) {
-    void setAutoReadEnabled(context, true);
+    void setAutoReadEnabled(context, true, { persistSettings: false });
   }
 }
 

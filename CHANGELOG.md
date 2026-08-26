@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.37 - 2026-08-25
+
+### Fixed
+- **Agent Auto-read runs in one window.** With several Cursor windows open, the focused window claims the reply and the rest stay quiet, so audio no longer echoes.
+- Extra windows work without write access to user `settings.json`. Auto-read falls back to extension state when the file is locked.
+- Jump forward advances one part per tap instead of skipping to the end.
+- Long replies split into paragraph-sized parts, and playback starts on part one while the rest generates.
+
 ## 0.1.35 - 2026-08-25
 
 ### Added

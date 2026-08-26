@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.37 - 2026-08-25
+
+### Fixed
+- Extra Cursor windows can use the extension without writing user settings. Auto-read is stored in extension state if `settings.json` is locked.
+
+## 0.1.36 - 2026-08-25
+
+### Fixed
+- Auto-read plays in only one Cursor window. Extra windows no longer start the same clip and echo.
+
 ## 0.1.35 - 2026-08-25
 
 ### Added

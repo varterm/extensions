@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 export const AUTO_READ_KEY = 'vartermCursor.autoReadAgentOutput';
 const RELATIVE_HOOK_COMMAND = './hooks/varterm-autoread.py';
 
-type AgentDrop = { text?: string; ts?: number };
+type AgentDrop = { text?: string; ts?: number; cwd?: string; workspace?: string };
 
 export function getAutoReadEnabled(context: vscode.ExtensionContext): boolean {
   return Boolean(context.globalState.get<boolean>(AUTO_READ_KEY));
@@ -65,6 +65,69 @@ export function stripForSpeech(text: string): string {
     .trim();
 }
 
+function windowWorkspaceRoots(): string[] {
+  return (vscode.workspace.workspaceFolders || []).map((folder) => folder.uri.fsPath);
+}
+
+function windowOwnsDrop(drop: AgentDrop): boolean {
+  const roots = windowWorkspaceRoots();
+  const candidates = [drop.workspace, drop.cwd].filter((value): value is string => Boolean(value));
+  if (!roots.length || !candidates.length) {
+    return false;
+  }
+  return candidates.some((candidate) =>
+    roots.some((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`))
+  );
+}
+
+function claimDelayMs(drop: AgentDrop): number {
+  const owns = windowOwnsDrop(drop);
+  const focused = vscode.window.state.focused;
+  if (owns && focused) {
+    return 0;
+  }
+  if (owns) {
+    return 40;
+  }
+  if (focused) {
+    return 80;
+  }
+  return 280;
+}
+
+function tryClaimAutoReadEvent(ts: number): boolean {
+  const claimsDir = path.join(os.homedir(), '.cursor', 'varterm-autoread-claims');
+  fs.mkdirSync(claimsDir, { recursive: true });
+  const stamp = String(ts).replace(/[^\d.]/g, '_');
+  const lockPath = path.join(claimsDir, `${stamp}.lock`);
+  try {
+    fs.writeFileSync(lockPath, `${process.pid}\n`, { flag: 'wx' });
+  } catch {
+    return false;
+  }
+
+  try {
+    const names = fs.readdirSync(claimsDir);
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const name of names) {
+      if (name === `${stamp}.lock`) {
+        continue;
+      }
+      const full = path.join(claimsDir, name);
+      try {
+        if (fs.statSync(full).mtimeMs < cutoff) {
+          fs.unlinkSync(full);
+        }
+      } catch {
+        // Ignore stale cleanup failures.
+      }
+    }
+  } catch {
+    // Ignore cleanup failures.
+  }
+  return true;
+}
+
 export function watchAgentDropFile(
   onText: (text: string) => void,
   log: (message: string) => void
@@ -74,6 +137,7 @@ export function watchAgentDropFile(
   fs.mkdirSync(dirPath, { recursive: true });
   let lastTs = 0;
   let debounce: ReturnType<typeof setTimeout> | undefined;
+  const pendingClaims = new Set<ReturnType<typeof setTimeout>>();
 
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -96,8 +160,20 @@ export function watchAgentDropFile(
           return;
         }
         lastTs = ts;
-        log(`Auto-read picked up text (${text.length} chars)`);
-        onText(text);
+        const delay = claimDelayMs(parsed);
+        log(
+          `Auto-read saw ${text.length} chars focused=${vscode.window.state.focused} owns=${windowOwnsDrop(parsed)} delay=${delay}ms`
+        );
+        const claimTimer = setTimeout(() => {
+          pendingClaims.delete(claimTimer);
+          if (!tryClaimAutoReadEvent(ts)) {
+            log('Auto-read skipped: another window already claimed this reply');
+            return;
+          }
+          log(`Auto-read playing in this window (${text.length} chars)`);
+          onText(text);
+        }, delay);
+        pendingClaims.add(claimTimer);
       } catch (error) {
         log(`Auto-read watch error: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -118,6 +194,10 @@ export function watchAgentDropFile(
       if (debounce) {
         clearTimeout(debounce);
       }
+      for (const timer of pendingClaims) {
+        clearTimeout(timer);
+      }
+      pendingClaims.clear();
       watcher.close();
     },
   };

@@ -1,6 +1,9 @@
 # Varterm Extensions
 
-Source code for Varterm browser and editor extensions.
+Source for the Varterm editor and browser extensions. MIT licensed.
+
+The editor extension ships **Agent Auto-read**: finished Cursor agent replies play while you keep working. One install, every window, zero echo. Long replies split into parts you can jump through, so you skip the preamble instead of scrolling the chat. Same engine reads whole files, RFCs, and multi-page docs — playback starts on part one while the rest generates.
+
 
 ## Repository Layout
 

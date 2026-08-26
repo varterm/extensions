@@ -1,8 +1,8 @@
 {
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
-  "description": "Auto-read the agent window, plus editor, selection, and clipboard. Play, pause, stop, and jump from the status bar.",
-  "version": "0.1.35",
+  "description": "Agent Auto-read speaks your agent's replies. One install, every window, zero echo. Play, pause, stop, jump from the status bar.",
+  "version": "0.1.37",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {

@@ -1,62 +1,71 @@
 # Varterm TTS
 
-Read the agent window, editor, selection, and clipboard aloud. Turn on **Auto-read** to hear finished assistant replies. Play, pause, stop, and jump from the status bar. Free, no login.
+**Hear your agent.** Flip on Agent Auto-read and finished replies play while you keep working. One install, every window, zero echo. Play, pause, stop, jump — all from the status bar. Editor, selection, and clipboard too. MIT. No login.
 
 ## Install
 
-In VS Code, open Extensions, search **Varterm TTS**, and click Install. Same search works in other compatible editors that use Open VSX.
+Extensions panel → search **Varterm TTS** → **Install**. Works in Cursor (Open VSX) and VS Code.
 
-Optional: download the latest `varterm-cursor-*.vsix` from [GitHub Releases](https://github.com/varterm/extensions/releases) and run `Extensions: Install from VSIX...`.
+Running many Cursor windows? Install **once for your user** — not **Install Workspace Extension**. Workspace installs only cover one folder, which is why the button seems to flip back and forth. Reload your other windows and you are done.
 
-Site and extra setup: [varterm.com/extensions](https://varterm.com/extensions).
+Prefer a file? Grab `varterm-cursor-*.vsix` from [GitHub Releases](https://github.com/varterm/extensions/releases) and run `Extensions: Install from VSIX...`.
+
+More at [varterm.com/extensions](https://varterm.com/extensions).
+
+## Agent Auto-read
+
+Click **Auto-read** in the status bar. When an agent reply **finishes**, it plays.
+
+It changes the loop: send the prompt, go back to your file, and let the answer come to you. No parking on the chat panel watching tokens stream, no scrolling back up to find the one line that mattered — jump back and hear it again.
+
+- One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other.
+- Playback stays in the editor. On macOS it runs through `afplay` — no Music.app, no extra tab.
+- Transport is icon-only while playing: jump back, pause, stop, jump forward, replay.
+- Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
+- Chat selections are not readable (webview). Auto-read captures the finished reply instead.
+
+## Long form
+
+Built for text that does not fit in one request — whole files, RFCs, and long agent dumps.
+
+- Text is split into paragraph-sized parts before synthesis.
+- Playback starts on part one while the rest is still generating, so there is no single-request timeout wall.
+- Hover the jump arrows to see part *n* of *total*, and move through them one at a time.
+- `vartermCursor.maxTotalTextChars` caps a single run (default 1,000,000 characters).
 
 ## Commands
 
-- `Varterm: Connect` - configure base URL and optional bearer token.
-- `Varterm: Set ElevenLabs API Key` - store/clear ElevenLabs key in secure extension storage.
-- `Varterm: Select Read-Aloud Voice` - pick from available Edge/Premium voices.
-- `Varterm: Read Editor/Selection Aloud` — synthesize active selection (or full editor text) and play audio.
-- `Varterm: Read Clipboard Aloud` — speak copied text.
-- `Varterm: Toggle Auto-Read` — play finished assistant replies from the status bar.
-- `Varterm: Read Last Agent Reply` — speak the last captured assistant reply again.
-- `Varterm: Pause Playback` / `Varterm: Resume Playback` / `Varterm: Stop Playback`.
-- `Varterm: Replay Last Audio` — play the last generated audio from the start.
-- `Varterm: Customize Keyboard Shortcuts` — change or remove Varterm key bindings.
-- `Varterm: Open Settings` — open all `vartermCursor.*` settings.
-- `Varterm: Clear Audio Cache` — remove leftover MP3s from older versions.
-- `Varterm: Save Last Audio as MP3` — optional export; playback does not write files.
+- `Varterm: Toggle Auto-Read` — agent replies play when they finish.
+- `Varterm: Read Editor/Selection Aloud` — selection first, otherwise the whole file.
+- `Varterm: Read Clipboard Aloud` — speak whatever you copied.
+- `Varterm: Read Last Agent Reply` — replay the last captured reply.
+- `Varterm: Pause Playback` / `Resume Playback` / `Stop Playback` / `Replay Last Audio`.
+- `Varterm: Select Read-Aloud Voice` — Edge and Premium voices.
+- `Varterm: Set ElevenLabs API Key` — stored in secure extension storage.
+- `Varterm: Connect` — only for a custom server or token.
+- `Varterm: Open Settings` / `Customize Keyboard Shortcuts`.
+- `Varterm: Clear Audio Cache` / `Save Last Audio as MP3`.
 
-## Default shortcuts
-
-Installed automatically (customize anytime via command palette):
+## Shortcuts
 
 | Action | macOS | Windows / Linux |
 |--------|-------|-----------------|
 | Read clipboard | `⌘+Shift+⌥+L` | `Ctrl+Shift+Y` |
 | Read editor / selection | `⌘+Shift+⌥+R` | `Ctrl+Shift+R` |
 
-To change or remove shortcuts: run **`Varterm: Customize Keyboard Shortcuts`**.
-
-Player notes:
-- On macOS, audio plays in the background with `afplay`. You stay in the editor — no Music.app, no extra tab.
-- Status bar **Auto-read**: click once to turn on. When an assistant reply **finishes**, that reply plays. Selecting text in the chat panel is not a source — the hook captures the finished reply.
-- Status bar while playing: **Pause**, **Stop**, **Replay**, and **jump** arrows. Mash jump to skip back or forward through chunks.
+Change or remove them with **`Varterm: Customize Keyboard Shortcuts`**.
 
 ## Settings
 
-You can tune behavior in Settings under `vartermCursor.*`:
+Everything lives under `vartermCursor.*`:
 
-- `vartermCursor.requestTimeoutMs`
-- `vartermCursor.requestRetries`
-- `vartermCursor.readAloudVoice`
-- `vartermCursor.readAloudRate`
-- `vartermCursor.readAloudProvider`
-- `vartermCursor.elevenLabsApiKey` (optional plain-text fallback; secure storage command is preferred)
-- `vartermCursor.maxCachedAudioFiles` (temporary files; default 8)
-- `vartermCursor.maxCachedAudioAgeHours` (default 24; `0` = keep until count limit)
-- `vartermCursor.autoReadAgentOutput` — same as the Auto-read status bar toggle
+- `readAloudVoice`, `readAloudRate`, `readAloudProvider` — voice, speed, Edge or Premium.
+- `autoReadAgentOutput` — same as the status bar toggle.
+- `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
+- `requestTimeoutMs`, `requestRetries` — for very long passages.
+- `elevenLabsApiKey` — plain-text fallback; the secure command is preferred.
 
-## Development
+## Build it yourself
 
 ```bash
 npm install
@@ -64,3 +73,4 @@ npm run build
 npm run package
 ```
 
+MIT licensed. Source: [varterm/extensions](https://github.com/varterm/extensions).
