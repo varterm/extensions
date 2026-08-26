@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.38 - 2026-08-25
+
+### Added
+- A small animated meter in the status bar shows which window is playing. It sits between Play and Auto-read. Flat bar when paused, gone when idle, hover for the part number.
+
 ## 0.1.37 - 2026-08-25
 
 ### Fixed

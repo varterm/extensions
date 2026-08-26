@@ -39,7 +39,20 @@ Publish the editor VSIX to **VS Code Marketplace** and **Open VSX** (Cursor) in 
 
 ```bash
 cd extensions/vscode
-export VSCE_PAT=...   # Azure DevOps PAT with Marketplace publish
-export OVSX_PAT=...   # Open VSX access token
+export VSCE_PAT=...   # Azure DevOps PAT, scope: Marketplace > Manage
+export OVSX_PAT=...   # https://open-vsx.org/user-settings/tokens
 npm run publish:stores
 ```
+
+Instead of exporting the marketplace PAT every time you can run `npx @vscode/vsce login varterm`
+once and the script will use the stored keychain credential. Open VSX has no stored login, so
+`OVSX_PAT` is always required. Either token can also live in an untracked
+`extensions/vscode/.env.publish` (or `~/.varterm-publish.env`) as `KEY=value` lines.
+
+```bash
+npm run stores:status     # version + description each store is serving vs package.json
+npm run publish:dry-run   # package and verify credentials, publish nothing
+```
+
+Both stores read the listing text from `package.json` `description`, so it only changes when a
+new version is published. `stores:status` flags the drift.

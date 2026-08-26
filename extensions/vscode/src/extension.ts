@@ -69,6 +69,7 @@ type ExtensionSettings = {
   readAloudProvider: 'edge' | 'premium';
   maxCachedAudioFiles: number;
   maxCachedAudioAgeHours: number;
+  showPlayingIndicator: boolean;
 };
 
 type AudioTrack = { title: string; base64: string };
@@ -94,6 +95,9 @@ let jumpBackBar: vscode.StatusBarItem | undefined;
 let jumpForwardBar: vscode.StatusBarItem | undefined;
 let replayBar: vscode.StatusBarItem | undefined;
 let autoReadStatusBar: vscode.StatusBarItem | undefined;
+let playingIndicator: vscode.StatusBarItem | undefined;
+let indicatorTimer: ReturnType<typeof setInterval> | undefined;
+let indicatorFrame = 0;
 let autoReadWatcher: { dispose: () => void } | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
@@ -107,6 +111,64 @@ function getOutputChannel(): vscode.OutputChannel {
 
 function logInfo(message: string): void {
   getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
+}
+
+// Compact 3-bar take on the 5-capsule logo (short–tall–short). Taller glyphs
+// read as vertical lines; three cells is tighter than a five-bar copy.
+const INDICATOR_FRAMES = ['▃▇▃', '▂█▄', '▄▇▂', '▃▆▃', '▂▇▃', '▄█▃'];
+const INDICATOR_PAUSED = '▂▅▂';
+const INDICATOR_INTERVAL_MS = 220;
+
+function playbackPositionLabel(): string {
+  const total = expectedTrackCount || playbackFiles.length || latestPlayback?.tracks.length || 0;
+  return total ? ` — part ${Math.min(playbackIndex + 1, total)} of ${total}` : '';
+}
+
+function stopIndicatorAnimation(): void {
+  if (indicatorTimer) {
+    clearInterval(indicatorTimer);
+    indicatorTimer = undefined;
+  }
+}
+
+function refreshPlayingIndicator(): void {
+  if (!playingIndicator) {
+    return;
+  }
+
+  if (!getSettings().showPlayingIndicator) {
+    stopIndicatorAnimation();
+    playingIndicator.hide();
+    return;
+  }
+
+  if (playbackState === 'playing') {
+    playingIndicator.text = INDICATOR_FRAMES[indicatorFrame];
+    playingIndicator.tooltip = `Varterm is playing in this window${playbackPositionLabel()}`;
+    playingIndicator.color = new vscode.ThemeColor('charts.green');
+    if (!indicatorTimer) {
+      indicatorTimer = setInterval(() => {
+        indicatorFrame = (indicatorFrame + 1) % INDICATOR_FRAMES.length;
+        if (playingIndicator) {
+          playingIndicator.text = INDICATOR_FRAMES[indicatorFrame];
+        }
+      }, INDICATOR_INTERVAL_MS);
+    }
+    playingIndicator.show();
+    return;
+  }
+
+  stopIndicatorAnimation();
+
+  if (playbackState === 'paused') {
+    playingIndicator.text = INDICATOR_PAUSED;
+    playingIndicator.tooltip = `Varterm is paused in this window${playbackPositionLabel()}`;
+    playingIndicator.color = new vscode.ThemeColor('descriptionForeground');
+    playingIndicator.show();
+    return;
+  }
+
+  playingIndicator.hide();
 }
 
 function refreshTransport(): void {
@@ -170,6 +232,8 @@ function refreshTransport(): void {
       replayBar.hide();
     }
   }
+
+  refreshPlayingIndicator();
 }
 
 function setPlaybackStatus(_text: string, state: typeof playbackState = playbackState): void {
@@ -555,6 +619,7 @@ function getSettings(): ExtensionSettings {
     readAloudProvider: config.get<'edge' | 'premium'>('readAloudProvider', 'edge'),
     maxCachedAudioFiles: config.get<number>('maxCachedAudioFiles', 8),
     maxCachedAudioAgeHours: config.get<number>('maxCachedAudioAgeHours', 24),
+    showPlayingIndicator: config.get<boolean>('showPlayingIndicator', true),
   };
 }
 
@@ -1646,10 +1711,18 @@ export function activate(context: vscode.ExtensionContext): void {
   replayBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 76);
   replayBar.command = 'vartermCursor.replayLast';
   context.subscriptions.push(replayBar);
+
+  playingIndicator = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 79.5);
+  playingIndicator.command = 'vartermCursor.statusBarAction';
+  context.subscriptions.push(playingIndicator);
+  context.subscriptions.push({ dispose: stopIndicatorAnimation });
   refreshTransport();
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('vartermCursor.showPlayingIndicator')) {
+        refreshPlayingIndicator();
+      }
       if (!event.affectsConfiguration('vartermCursor.autoReadAgentOutput')) {
         return;
       }
@@ -1736,5 +1809,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   autoReadWatcher?.dispose();
+  stopIndicatorAnimation();
   stopHostPlayback();
 }

@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Agent Auto-read speaks your agent's replies. One install, every window, zero echo. Play, pause, stop, jump from the status bar.",
-  "version": "0.1.37",
+  "version": "0.1.38",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -220,7 +220,10 @@
         "vartermCursor.readAloudProvider": {
           "type": "string",
           "default": "edge",
-          "enum": ["edge", "premium"],
+          "enum": [
+            "edge",
+            "premium"
+          ],
           "description": "TTS provider for read aloud. Edge supports longer chunks, premium uses /api/tts voices."
         },
         "vartermCursor.elevenLabsApiKey": {
@@ -241,6 +244,11 @@
           "minimum": 0,
           "maximum": 2160,
           "description": "Delete cached MP3s older than this many hours. Set 0 to keep files until the count limit is reached."
+        },
+        "vartermCursor.showPlayingIndicator": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a small animated meter between Play and Auto-read while this window is playing audio."
         }
       }
     }
@@ -250,7 +258,9 @@
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
     "package": "npm run build && npx @vscode/vsce package --follow-symlinks",
-    "publish:stores": "bash scripts/publish-stores.sh"
+    "publish:stores": "bash scripts/publish-stores.sh",
+    "publish:dry-run": "bash scripts/publish-stores.sh --dry-run",
+    "stores:status": "node scripts/store-status.mjs"
   },
   "keywords": [
     "speech-synthesis",

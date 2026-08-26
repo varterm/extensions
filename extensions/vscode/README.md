@@ -21,6 +21,7 @@ It changes the loop: send the prompt, go back to your file, and let the answer c
 - One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other.
 - Playback stays in the editor. On macOS it runs through `afplay` — no Music.app, no extra tab.
 - Transport is icon-only while playing: jump back, pause, stop, jump forward, replay.
+- A compact 3-bar meter (the logo’s vertical capsules) animates between Play and Auto-read so you can spot the window that is talking. It flattens when paused and vanishes when idle.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
 - Chat selections are not readable (webview). Auto-read captures the finished reply instead.
 
@@ -61,6 +62,7 @@ Everything lives under `vartermCursor.*`:
 
 - `readAloudVoice`, `readAloudRate`, `readAloudProvider` — voice, speed, Edge or Premium.
 - `autoReadAgentOutput` — same as the status bar toggle.
+- `showPlayingIndicator` — the animated meter in the status bar (default on).
 - `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
 - `requestTimeoutMs`, `requestRetries` — for very long passages.
 - `elevenLabsApiKey` — plain-text fallback; the secure command is preferred.

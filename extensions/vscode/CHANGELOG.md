@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.38 - 2026-08-25
+
+### Added
+- A small animated meter in the status bar shows which window is playing. It sits between Play and Auto-read, dims to a flat bar when paused, and disappears when nothing is playing. Hover for the part number, click to pause. Turn it off with `vartermCursor.showPlayingIndicator`.
+
+### Changed
+- Playing meter uses a 3-bar mountain (logo inner bars) so it reads as vertical capsules and takes less status-bar width than a five-bar copy.
+- `npm run publish:stores` accepts a stored `vsce login` when `VSCE_PAT` is unset, reads tokens from an untracked `.env.publish`, and prints a listing comparison after publishing. `npm run stores:status` shows the version and description each store is serving.
+
 ## 0.1.37 - 2026-08-25
 
 ### Fixed
