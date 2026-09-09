@@ -2,111 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Varterm Screenshot 3</title>
   <style>
+    html, body { margin: 0; width: 1280px; height: 800px; overflow: hidden; }
     body {
-      margin: 0;
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: radial-gradient(circle at 50% 0%, #1f2937, #0a0f1c 60%);
-      color: #e5e7eb;
+      color: #e5e7eb; box-sizing: border-box; padding: 36px 40px 28px;
     }
-    .frame {
-      width: 1240px;
-      height: 760px;
-      margin: 20px auto;
-      border-radius: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      background: #0b1220;
-      overflow: hidden;
-      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
-      padding: 26px 28px;
-      box-sizing: border-box;
-    }
-    h1 {
-      margin: 0 0 10px;
-      font-size: 34px;
-      color: #f9fafb;
-    }
-    .sub {
-      margin: 0 0 18px;
-      color: #9ca3af;
-      font-size: 16px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr) 340px;
-      gap: 14px;
-      height: 620px;
-    }
+    h1 { margin: 0 0 8px; font-size: 34px; color: #f9fafb; }
+    .sub { margin: 0 0 20px; color: #9ca3af; font-size: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr) 360px; gap: 14px; height: 640px; }
     .step {
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(17, 24, 39, 0.85);
-      padding: 14px;
-      box-sizing: border-box;
+      border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(17, 24, 39, 0.85); padding: 16px; box-sizing: border-box;
     }
-    .step h2 {
-      margin: 0 0 8px;
-      font-size: 18px;
-      color: #d1fae5;
-    }
-    .step p {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.5;
-      color: #cbd5e1;
-    }
+    .step h2 { margin: 0 0 8px; font-size: 18px; color: #d1fae5; }
+    .step p { margin: 0; font-size: 14px; line-height: 1.5; color: #cbd5e1; }
     .chip {
-      margin-top: 10px;
-      display: inline-block;
-      padding: 5px 9px;
-      border-radius: 999px;
-      font-size: 12px;
-      background: rgba(16, 185, 129, 0.2);
-      border: 1px solid rgba(16, 185, 129, 0.4);
-      color: #d1fae5;
+      margin-top: 12px; display: inline-block; padding: 5px 9px; border-radius: 999px;
+      font-size: 12px; background: rgba(16, 185, 129, 0.2);
+      border: 1px solid rgba(16, 185, 129, 0.4); color: #d1fae5;
     }
     .popup-wrap {
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.12);
       background: rgba(2, 6, 23, 0.75);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
     }
-    iframe {
-      width: 320px;
-      height: 600px;
-      border: 0;
-      border-radius: 10px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-    }
+    iframe { width: 340px; height: 620px; border: 0; border-radius: 10px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); }
   </style>
 </head>
 <body>
-  <div class="frame">
-    <h1>Simple Read-Aloud Workflow</h1>
-    <p class="sub">Select text, click read, and keep moving through long-form content.</p>
-    <div class="grid">
-      <div class="step">
-        <h2>1) Select Text</h2>
-        <p>Highlight any section from docs, articles, or AI responses. Great for long passages.</p>
-        <span class="chip">Long-form</span>
-      </div>
-      <div class="step">
-        <h2>2) Start Reading</h2>
-        <p>Use the popup, floating button, or context menu. Choose cloud or browser voices in seconds.</p>
-        <span class="chip">One click</span>
-      </div>
-      <div class="step">
-        <h2>3) Listen Clearly</h2>
-        <p>Enable markdown stripping for cleaner speech and smoother playback from technical content.</p>
-        <span class="chip">Markdown-friendly</span>
-      </div>
-      <div class="popup-wrap">
-        <iframe src="../popup.html" title="Varterm popup"></iframe>
-      </div>
+  <h1>Listen, search, jump</h1>
+  <p class="sub">Read a page, a video transcript, or an AI reply — then find the moment you need.</p>
+  <div class="grid">
+    <div class="step">
+      <h2>1) Select or open a transcript</h2>
+      <p>Highlight a passage, or on a video press Read Video Transcript to open a searchable caption list.</p>
+      <span class="chip">Pages and videos</span>
+    </div>
+    <div class="step">
+      <h2>2) Start reading</h2>
+      <p>Use the popup, floating button, or Alt+Shift+R. Choose a voice and speed without stopping.</p>
+      <span class="chip">One click</span>
+    </div>
+    <div class="step">
+      <h2>3) Search and jump</h2>
+      <p>Type in the panel to find a line. Click it to hear from there, or click a timestamp to move the video.</p>
+      <span class="chip">Searchable transcripts</span>
+    </div>
+    <div class="popup-wrap">
+      <iframe src="popup-store.html" title="Varterm popup"></iframe>
     </div>
   </div>
 </body>

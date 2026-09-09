@@ -16,3 +16,4 @@ scripts/build-icon-font.mjs
 scripts/preview-icon-font.html
 scripts/publish-stores.sh
 scripts/store-status.mjs
+STORE_UPDATE.md

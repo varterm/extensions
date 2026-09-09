@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Varterm TTS - Text to Speech",
-  "version": "1.0.0",
-  "description": "Read any web page aloud with natural AI voices. Select text and listen instantly.",
+  "version": "1.4.2",
+  "description": "Read pages, YouTube transcripts, and AI chats aloud. Search, jump, change speed, and hear new replies as they arrive.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -10,8 +10,20 @@
     "storage"
   ],
   "host_permissions": [
-    "https://varterm.com/*",
-    "https://www.varterm.com/*"
+    "https://www.varterm.com/api/*"
+  ],
+  "optional_host_permissions": [
+    "https://claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://www.kimi.com/*",
+    "https://kimi.com/*",
+    "https://kimi.moonshot.cn/*",
+    "https://gemini.google.com/*",
+    "https://grok.com/*",
+    "https://www.perplexity.ai/*",
+    "https://perplexity.ai/*",
+    "https://chat.deepseek.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -34,8 +46,8 @@
   "commands": {
     "read-selection": {
       "suggested_key": {
-        "default": "Ctrl+Shift+R",
-        "mac": "Command+Shift+R"
+        "default": "Alt+Shift+R",
+        "mac": "Alt+Shift+R"
       },
       "description": "Read selected text aloud"
     },
@@ -45,6 +57,19 @@
         "mac": "Command+Shift+S"
       },
       "description": "Stop speaking"
+    },
+    "pause-speaking": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "Pause or resume speaking"
+    },
+    "jump-back": {
+      "description": "Jump back one part"
+    },
+    "jump-forward": {
+      "description": "Jump forward one part"
     }
   }
 }

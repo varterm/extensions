@@ -11,6 +11,12 @@ mkdir -p dist
 cp manifest.json dist/
 cp background.js dist/
 cp content.js dist/
+cp youtube.js dist/
+cp claude.js dist/
+cp chats.js dist/
+cp sites.js dist/
+cp panel.js dist/
+cp voices.js dist/
 cp content.css dist/
 cp popup.html dist/
 cp popup.js dist/
@@ -26,7 +32,7 @@ echo "✅ Chrome extension packaged: varterm-tts-chrome.zip"
 echo ""
 echo "Next steps:"
 echo "1. Go to https://chrome.google.com/webstore/devconsole"
-echo "2. Click 'New Item'"
-echo "3. Upload varterm-tts-chrome.zip"
-echo "4. Fill in store listing details"
+echo "2. Open the existing Varterm listing"
+echo "3. Upload varterm-tts-chrome.zip as a new package"
+echo "4. Update listing copy from STORE_LISTING.md"
 echo "5. Submit for review"

@@ -1,8 +1,8 @@
 {
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
-  "description": "Agent Auto-read speaks your agent's replies. One install, every window, zero echo. Play, pause, stop, jump from the status bar.",
-  "version": "0.1.40",
+  "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
+  "version": "0.1.47",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -36,6 +36,10 @@
         "title": "Varterm: Select Read-Aloud Voice"
       },
       {
+        "command": "vartermCursor.openPlaybackMenu",
+        "title": "Varterm: Reading Speed and Voice"
+      },
+      {
         "command": "vartermCursor.setElevenLabsApiKey",
         "title": "Varterm: Set ElevenLabs API Key"
       },
@@ -45,7 +49,24 @@
       },
       {
         "command": "vartermCursor.readClipboardAloud",
-        "title": "Varterm: Read Clipboard Aloud"
+        "title": "Varterm: Read Clipboard Aloud",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "vartermCursor.readSelectionAloud",
+        "title": "Varterm: Read Selection Aloud",
+        "shortTitle": "Read selection",
+        "icon": "$(selection)"
+      },
+      {
+        "command": "vartermCursor.readSelectionOrClipboard",
+        "title": "Varterm: Read Selection or Clipboard",
+        "shortTitle": "Read aloud",
+        "icon": "$(unmute)"
+      },
+      {
+        "command": "vartermCursor.readErrorsAloud",
+        "title": "Varterm: Read Errors & Warnings Aloud"
       },
       {
         "command": "vartermCursor.readLastAgentReply",
@@ -112,6 +133,29 @@
         "title": "Varterm: Save Last Playback to Library"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "vartermCursor.readSelectionOrClipboard",
+          "group": "navigation@80"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "vartermCursor.readSelectionAloud",
+          "when": "editorHasSelection",
+          "group": "varterm@1"
+        },
+        {
+          "command": "vartermCursor.readClipboardAloud",
+          "group": "varterm@2"
+        },
+        {
+          "command": "vartermCursor.readErrorsAloud",
+          "group": "varterm@3"
+        }
+      ]
+    },
     "keybindings": [
       {
         "command": "vartermCursor.readClipboardAloud",

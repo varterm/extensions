@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "varterm",
+  "description": "Read-aloud tooling from Varterm",
+  "owner": {
+    "name": "Varterm",
+    "url": "https://varterm.com"
+  },
+  "plugins": [
+    {
+      "name": "varterm",
+      "source": "./plugins/claude-code",
+      "description": "Reads Claude's replies aloud in a natural voice. No model download and no Python, and the same voice Varterm uses in the editor and the browser."
+    }
+  ]
+}

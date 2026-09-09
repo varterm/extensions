@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "varterm",
+  "displayName": "Varterm Read Aloud",
+  "version": "0.1.0",
+  "description": "Reads Claude's replies aloud in a natural voice. No model download, no Python, and the same voice you get in the editor and the browser.",
+  "author": {
+    "name": "Varterm",
+    "url": "https://varterm.com"
+  },
+  "homepage": "https://varterm.com",
+  "repository": "https://github.com/varterm/extensions",
+  "license": "MIT",
+  "keywords": ["tts", "text-to-speech", "read-aloud", "accessibility", "voice"],
+  "user_config": {
+    "voice": {
+      "type": "string",
+      "title": "Voice",
+      "description": "A Microsoft neural voice id, for example en-US-EmmaNeural or en-GB-RyanNeural. Over a hundred languages are available.",
+      "default": "en-US-EmmaNeural"
+    },
+    "rate": {
+      "type": "number",
+      "title": "Speaking rate",
+      "description": "1 is normal speed. 1.25 is a comfortable skim.",
+      "default": 1,
+      "min": 0.5,
+      "max": 2
+    },
+    "max_chars": {
+      "type": "number",
+      "title": "Longest reply to read",
+      "description": "Replies longer than this are skipped rather than read at length. Set high to always read.",
+      "default": 4000,
+      "min": 200,
+      "max": 40000
+    }
+  }
+}

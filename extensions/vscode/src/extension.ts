@@ -34,6 +34,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_REQUEST_RETRIES = 2;
 const SHORTCUTS_TIP_KEY = 'vartermCursor.shortcutsTipShown';
 const AUTO_READ_TIP_KEY = 'vartermCursor.autoReadTipShown';
+const RATE_KEY = 'vartermCursor.readAloudRate';
+const SPEED_CHOICES = [0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 
 const SHIPPED_SHORTCUTS = {
   readClipboardAloud: { mac: 'cmd+shift+alt+l', win: 'ctrl+shift+y' },
@@ -87,9 +89,15 @@ type AudioTrack = { title: string; base64: string };
 
 let isGeneratingAudio = false;
 let generationCts: vscode.CancellationTokenSource | undefined;
+let readGeneration = 0;
 let latestPlayback: { tracks: AudioTrack[]; label: string } | undefined;
+let lastAgentPlayback: { tracks: AudioTrack[]; label: string } | undefined;
+let latestSpoken: { text: string; label: string; rate: number; voiceId: string } | undefined;
 let playerProvider: VartermPlayerViewProvider | undefined;
 let playbackProcess: ChildProcess | undefined;
+let previewProcess: ChildProcess | undefined;
+let previewGeneration = 0;
+let previewCts: vscode.CancellationTokenSource | undefined;
 const livePlayers = new Set<ChildProcess>();
 const stoppedPlayers = new WeakSet<ChildProcess>();
 let playbackState: 'idle' | 'generating' | 'playing' | 'paused' = 'idle';
@@ -112,6 +120,8 @@ let jumpBackBar: vscode.StatusBarItem | undefined;
 let jumpForwardBar: vscode.StatusBarItem | undefined;
 let replayBar: vscode.StatusBarItem | undefined;
 let autoReadStatusBar: vscode.StatusBarItem | undefined;
+let listenBar: vscode.StatusBarItem | undefined;
+let speedBar: vscode.StatusBarItem | undefined;
 let playingIndicator: vscode.StatusBarItem | undefined;
 let indicatorTimer: ReturnType<typeof setInterval> | undefined;
 let indicatorFrame = 0;
@@ -279,6 +289,123 @@ function refreshTransport(): void {
   }
 
   refreshPlayingIndicator();
+  refreshListenBar();
+}
+
+function editorHasSelection(): boolean {
+  const editor = vscode.window.activeTextEditor;
+  return Boolean(editor?.document.getText(editor.selection).trim());
+}
+
+function formatSpeed(rate: number): string {
+  const rounded = Math.round(rate * 100) / 100;
+  return `${rounded}×`;
+}
+
+function getReadAloudRate(context: vscode.ExtensionContext = extensionContext as vscode.ExtensionContext): number {
+  const stored = context?.globalState.get<number>(RATE_KEY);
+  if (typeof stored === 'number' && stored >= 0.5 && stored <= 2) {
+    return stored;
+  }
+  return getSettings().readAloudRate;
+}
+
+function refreshSpeedBar(): void {
+  if (!speedBar) {
+    return;
+  }
+  const rate = getReadAloudRate();
+  speedBar.text = `$(dashboard) ${formatSpeed(rate)}`;
+  speedBar.tooltip = `Reading speed ${formatSpeed(rate)}. Click for speed, voice, and settings.`;
+  speedBar.command = 'vartermCursor.openPlaybackMenu';
+  speedBar.show();
+}
+
+function spokenSettingsStale(context: vscode.ExtensionContext): boolean {
+  if (!latestSpoken) {
+    return false;
+  }
+  return (
+    latestSpoken.rate !== getReadAloudRate(context) || latestSpoken.voiceId !== currentVoiceId(context)
+  );
+}
+
+async function replayWithCurrentSettings(context: vscode.ExtensionContext): Promise<boolean> {
+  if (latestSpoken?.text && spokenSettingsStale(context)) {
+    await readTextAloud(context, latestSpoken.text, latestSpoken.label, { replace: true });
+    return true;
+  }
+  return false;
+}
+
+async function setReadAloudRate(
+  context: vscode.ExtensionContext,
+  rate: number
+): Promise<void> {
+  const next = Math.min(2, Math.max(0.5, Math.round(rate * 100) / 100));
+  await context.globalState.update(RATE_KEY, next);
+  await tryUpdateUserSetting('readAloudRate', next);
+  refreshSpeedBar();
+  logInfo(`Read speed set to ${formatSpeed(next)}`);
+
+  const shouldReread =
+    Boolean(latestSpoken?.text) &&
+    (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'generating');
+  if (shouldReread && latestSpoken) {
+    await readTextAloud(context, latestSpoken.text, latestSpoken.label, { replace: true });
+  }
+}
+
+async function openPlaybackMenu(context: vscode.ExtensionContext): Promise<void> {
+  const current = getReadAloudRate(context);
+  const voiceName = context.globalState.get<string>(VOICE_NAME_KEY) || getSettings().readAloudVoice;
+  type MenuItem = vscode.QuickPickItem & {
+    action?: 'speed' | 'voice' | 'settings';
+    rate?: number;
+  };
+  const items: MenuItem[] = [
+    ...SPEED_CHOICES.map((rate) => ({
+      label: rate === current ? `$(check) ${formatSpeed(rate)}` : formatSpeed(rate),
+      description: rate === current ? 'Current speed' : undefined,
+      action: 'speed' as const,
+      rate,
+    })),
+    { kind: vscode.QuickPickItemKind.Separator, label: '' },
+    { label: '$(person) Voice…', description: voiceName, action: 'voice' },
+    { label: '$(gear) Open settings', action: 'settings' },
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Varterm',
+    placeHolder: 'Reading speed',
+  });
+  if (!picked?.action) {
+    return;
+  }
+  if (picked.action === 'voice') {
+    await selectReadAloudVoice(context);
+    return;
+  }
+  if (picked.action === 'settings') {
+    await openSettings();
+    return;
+  }
+  if (picked.action === 'speed' && typeof picked.rate === 'number' && picked.rate !== current) {
+    await setReadAloudRate(context, picked.rate);
+  }
+}
+
+function refreshListenBar(): void {
+  if (!listenBar) {
+    return;
+  }
+  const selected = editorHasSelection();
+  listenBar.text = selected ? '$(selection)' : '$(clippy)';
+  listenBar.tooltip = selected
+    ? 'Read the highlighted selection (nothing is copied)'
+    : 'Highlight text to read it, or click to read the clipboard';
+  listenBar.command = 'vartermCursor.readSelectionOrClipboard';
+  listenBar.show();
 }
 
 // Advertise to the other Cursor windows whether this one holds the audio, so
@@ -370,11 +497,17 @@ async function setAutoReadEnabled(
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`Hook install skipped: ${message}`);
   }
-  autoReadWatcher = watchAgentDropFile((text) => {
-    void readTextAloud(context, text, 'agent reply', { replace: true }).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
-    });
+  autoReadWatcher = watchAgentDropFile((text, markHeard) => {
+    return readTextAloud(context, text, 'agent reply', { replace: true, onStarted: markHeard }).catch(
+      (error) => {
+        if (isReadCancelled(error)) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
+        throw error;
+      }
+    );
   }, logInfo);
   logInfo('Auto-read on');
 }
@@ -405,6 +538,17 @@ function forceKillChild(child: ChildProcess): void {
     }
   } catch {
     // Already exited.
+  }
+}
+
+function stopPreviewPlayback(): void {
+  previewGeneration += 1;
+  previewCts?.cancel();
+  previewCts?.dispose();
+  previewCts = undefined;
+  if (previewProcess) {
+    forceKillChild(previewProcess);
+    previewProcess = undefined;
   }
 }
 
@@ -449,7 +593,10 @@ function killPlaybackProcessAsync(): Promise<void> {
   ).then(() => undefined);
 }
 
-function stopHostPlayback(): void {
+function stopHostPlayback(options?: { keepPreview?: boolean }): void {
+  if (!options?.keepPreview) {
+    stopPreviewPlayback();
+  }
   playGeneration += 1;
   waitingForChunk = undefined;
   pausedOffsetMs = undefined;
@@ -935,30 +1082,195 @@ async function fetchVoices(context: vscode.ExtensionContext): Promise<VoiceOptio
   return voices;
 }
 
+function currentVoiceId(context: vscode.ExtensionContext): string {
+  return context.globalState.get<string>(VOICE_ID_KEY) || getSettings().readAloudVoice;
+}
+
+function previewLineForVoice(voice: VoiceOption): string {
+  const name = voice.label.split(' (')[0]?.trim() || 'this voice';
+  return `Hi, this is ${name}.`;
+}
+
+async function applyVoice(context: vscode.ExtensionContext, voice: VoiceOption): Promise<void> {
+  await context.globalState.update(VOICE_ID_KEY, voice.id);
+  await context.globalState.update(VOICE_NAME_KEY, voice.label);
+  await context.globalState.update(VOICE_PROVIDER_KEY, voice.provider);
+  await tryUpdateUserSetting('readAloudVoice', voice.id);
+  await tryUpdateUserSetting('readAloudProvider', voice.provider);
+  logInfo(`Voice set to ${voice.label}`);
+  const shouldReread =
+    Boolean(latestSpoken?.text) &&
+    (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'generating');
+  if (shouldReread && latestSpoken) {
+    await readTextAloud(context, latestSpoken.text, latestSpoken.label, { replace: true });
+  }
+}
+
+const previewCache = new Map<string, Uint8Array>();
+const PREVIEW_BUTTON: vscode.QuickInputButton = {
+  iconPath: new vscode.ThemeIcon('unmute'),
+  tooltip: 'Play a short preview',
+};
+
+function previewCacheKey(voice: VoiceOption, rate: number): string {
+  return `${voice.provider}:${voice.id}:${rate}`;
+}
+
+function startPreviewAfplay(filePath: string, generation: number): void {
+  if (generation !== previewGeneration || process.platform !== 'darwin') {
+    return;
+  }
+  if (previewProcess) {
+    forceKillChild(previewProcess);
+    previewProcess = undefined;
+  }
+  const child = spawn('/usr/bin/afplay', [filePath], {
+    stdio: 'ignore',
+    env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+  });
+  previewProcess = child;
+  child.on('close', () => {
+    if (previewProcess === child) {
+      previewProcess = undefined;
+    }
+  });
+}
+
+async function playPreviewBytes(
+  context: vscode.ExtensionContext,
+  audioBytes: Uint8Array,
+  generation: number
+): Promise<void> {
+  if (generation !== previewGeneration || audioBytes.byteLength < 100) {
+    return;
+  }
+  const outputDir = audioCacheDir(context);
+  await vscode.workspace.fs.createDirectory(outputDir);
+  const uri = vscode.Uri.joinPath(outputDir, `varterm-preview.mp3`);
+  await vscode.workspace.fs.writeFile(uri, Buffer.from(audioBytes));
+  if (generation !== previewGeneration) {
+    return;
+  }
+  startPreviewAfplay(uri.fsPath, generation);
+}
+
+async function previewVoice(context: vscode.ExtensionContext, voice: VoiceOption): Promise<void> {
+  const rate = getReadAloudRate(context);
+  const cacheKey = previewCacheKey(voice, rate);
+  const cached = previewCache.get(cacheKey);
+
+  stopPreviewPlayback();
+  const generation = previewGeneration;
+  const cts = new vscode.CancellationTokenSource();
+  previewCts = cts;
+
+  if (playbackState === 'playing') {
+    pauseHostPlayback();
+  }
+
+  if (cached) {
+    logInfo(`Voice preview cache ${voice.id}`);
+    await playPreviewBytes(context, cached, generation);
+    return;
+  }
+
+  const endpoint = voice.provider === 'premium' ? '/api/tts' : '/api/edge-tts';
+  const text = previewLineForVoice(voice);
+  const payload =
+    voice.provider === 'premium'
+      ? { text, voiceId: voice.id, speed: rate }
+      : { text, voice: voice.id, rate };
+
+  try {
+    const audioBytes = await postBinary(context, endpoint, payload, {
+      cancellationToken: cts.token,
+      retries: 0,
+      timeoutMs: 12000,
+    });
+    if (generation !== previewGeneration || cts.token.isCancellationRequested) {
+      return;
+    }
+    if (audioBytes.byteLength < 100) {
+      throw new Error('Preview audio was empty.');
+    }
+    previewCache.set(cacheKey, audioBytes);
+    logInfo(`Voice preview ${voice.id} (${audioBytes.byteLength} bytes)`);
+    await playPreviewBytes(context, audioBytes, generation);
+  } catch (error) {
+    if (isReadCancelled(error) || cts.token.isCancellationRequested) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    logInfo(`Voice preview failed (${voice.id}): ${message}`);
+    vscode.window.showWarningMessage(`Varterm could not preview ${voice.label.split(' (')[0]}.`);
+  }
+}
+
 async function selectReadAloudVoice(context: vscode.ExtensionContext): Promise<void> {
   const voices = await fetchVoices(context);
   if (!voices.length) {
     throw new Error('No voices available. Check your API base URL and try again.');
   }
 
-  const picked = await vscode.window.showQuickPick(
-    voices.map((voice) => ({
-      label: voice.label,
-      description: `${voice.provider.toUpperCase()} • ${voice.description}`,
-      voice,
-    })),
-    { placeHolder: 'Select a read-aloud voice' }
-  );
+  type VoiceItem = vscode.QuickPickItem & { voice: VoiceOption };
+  const currentId = currentVoiceId(context);
+  const items: VoiceItem[] = voices.map((voice) => ({
+    label: voice.id === currentId ? `$(check) ${voice.label}` : voice.label,
+    description: `${voice.provider.toUpperCase()} • ${voice.description}`,
+    voice,
+    buttons: [PREVIEW_BUTTON],
+  }));
 
-  if (!picked) {
-    return;
+  const picker = vscode.window.createQuickPick<VoiceItem>();
+  picker.title = 'Varterm voice';
+  picker.placeholder = 'Click the speaker to preview. Press Enter to use the highlighted voice.';
+  picker.matchOnDescription = true;
+  picker.ignoreFocusOut = true;
+  picker.items = items;
+  const current = items.find((item) => item.voice.id === currentId);
+  if (current) {
+    picker.activeItems = [current];
   }
 
-  await context.globalState.update(VOICE_ID_KEY, picked.voice.id);
-  await context.globalState.update(VOICE_NAME_KEY, picked.voice.label);
-  await context.globalState.update(VOICE_PROVIDER_KEY, picked.voice.provider);
+  const runPreview = (voice: VoiceOption | undefined) => {
+    if (!voice) {
+      return;
+    }
+    picker.busy = true;
+    void previewVoice(context, voice).finally(() => {
+      picker.busy = false;
+    });
+  };
 
-  vscode.window.showInformationMessage(`Varterm voice selected: ${picked.voice.label}`);
+  picker.onDidTriggerItemButton((event) => {
+    runPreview(event.item.voice);
+  });
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      stopPreviewPlayback();
+      picker.dispose();
+      resolve();
+    };
+
+    picker.onDidAccept(() => {
+      const voice = picker.selectedItems[0]?.voice || picker.activeItems[0]?.voice;
+      picker.hide();
+      finish();
+      if (voice) {
+        void applyVoice(context, voice);
+      }
+    });
+    picker.onDidHide(() => {
+      finish();
+    });
+    picker.show();
+  });
 }
 
 function looksLikeBinary(bytes: Uint8Array): boolean {
@@ -1279,34 +1591,77 @@ async function askAI(context: vscode.ExtensionContext): Promise<void> {
     : (await vscode.window.showInformationMessage('Varterm answer ready.', 'Read answer aloud'));
 
   if (settings.autoReadAnswersAloud || readAction === 'Read answer aloud') {
-    await readTextAloud(context, response.result.answer, 'answer');
+    await readTextAloud(context, response.result.answer, 'answer', { replace: true });
   }
 
   await maybeOpenSourceFromAnswer(response.result.sources);
+}
+
+class ReadCancelledError extends Error {
+  readonly name = 'ReadCancelledError';
+  constructor() {
+    super('Cancelled');
+  }
+}
+
+function isReadCancelled(error: unknown): boolean {
+  if (error instanceof ReadCancelledError) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message === 'Cancelled' || error.message === 'Operation cancelled';
+}
+
+function cancelCurrentRead(): void {
+  readGeneration += 1;
+  const previous = generationCts;
+  generationCts = undefined;
+  isGeneratingAudio = false;
+  previous?.cancel();
+}
+
+function beginReadSession(): { generation: number; cts: vscode.CancellationTokenSource } {
+  const previous = generationCts;
+  generationCts = undefined;
+  isGeneratingAudio = false;
+  previous?.cancel();
+  const cts = new vscode.CancellationTokenSource();
+  const generation = ++readGeneration;
+  generationCts = cts;
+  isGeneratingAudio = true;
+  return { generation, cts };
+}
+
+function isCurrentRead(generation: number, cts: vscode.CancellationTokenSource): boolean {
+  return generation === readGeneration && generationCts === cts;
+}
+
+function rememberPlayback(tracks: AudioTrack[], label: string): void {
+  latestPlayback = { tracks: tracks.slice(), label };
+  if (label === 'agent reply') {
+    lastAgentPlayback = { tracks: tracks.slice(), label };
+  }
 }
 
 async function readTextAloud(
   context: vscode.ExtensionContext,
   text: string,
   label: string,
-  options?: { replace?: boolean }
+  options?: { replace?: boolean; onStarted?: () => void }
 ): Promise<void> {
   logInfo(`readTextAloud start: label=${label}, chars=${text.length}`);
-  if (isGeneratingAudio) {
-    if (!options?.replace) {
-      const choice = await vscode.window.showWarningMessage(
-        'Varterm is still generating audio.',
-        'Cancel and start over',
-        'Wait'
-      );
-      if (choice !== 'Cancel and start over') {
-        return;
-      }
+  const replace = options?.replace !== false;
+  if (isGeneratingAudio && !replace) {
+    const choice = await vscode.window.showWarningMessage(
+      'Varterm is still generating audio.',
+      'Cancel and start over',
+      'Wait'
+    );
+    if (choice !== 'Cancel and start over') {
+      return;
     }
-    generationCts?.cancel();
-    generationCts?.dispose();
-    generationCts = undefined;
-    isGeneratingAudio = false;
   }
 
   const settings = getSettings();
@@ -1314,11 +1669,14 @@ async function readTextAloud(
   if (!normalized) {
     throw new Error('No text available to read aloud.');
   }
+  const spokenRate = getReadAloudRate(context);
+  const spokenVoiceId = context.globalState.get<string>(VOICE_ID_KEY) || settings.readAloudVoice;
+  latestSpoken = { text: normalized, label, rate: spokenRate, voiceId: spokenVoiceId };
 
+  const { generation, cts } = beginReadSession();
+  const token = cts.token;
+  const stillMine = () => isCurrentRead(generation, cts);
   stopHostPlayback();
-  isGeneratingAudio = true;
-  generationCts = new vscode.CancellationTokenSource();
-  const token = generationCts.token;
   setPlaybackStatus('$(loading~spin)', 'generating');
   playerProvider?.post({ type: 'loading', label });
 
@@ -1350,16 +1708,19 @@ async function readTextAloud(
       let endpoint = providerToUse === 'premium' ? '/api/tts' : '/api/edge-tts';
       let payload =
         providerToUse === 'premium'
-          ? { text: chunkText, voiceId: voiceToUse, speed: settings.readAloudRate }
-          : { text: chunkText, voice: voiceToUse, rate: settings.readAloudRate };
+          ? { text: chunkText, voiceId: voiceToUse, speed: spokenRate }
+          : { text: chunkText, voice: voiceToUse, rate: spokenRate };
 
       let audioBytes: Uint8Array;
       try {
-        if (token.isCancellationRequested) {
-          throw new Error('Cancelled');
+        if (!stillMine() || token.isCancellationRequested) {
+          throw new ReadCancelledError();
         }
         audioBytes = await postBinary(context, endpoint, payload, { cancellationToken: token });
       } catch (error) {
+        if (!stillMine() || isReadCancelled(error)) {
+          throw new ReadCancelledError();
+        }
         const message = error instanceof Error ? error.message : String(error);
         const premiumKeyMissing =
           providerToUse === 'premium' && /ELEVENLABS_API_KEY|ElevenLabs/i.test(message);
@@ -1370,7 +1731,7 @@ async function readTextAloud(
         providerToUse = 'edge';
         voiceToUse = 'en-US-AriaNeural';
         endpoint = '/api/edge-tts';
-        payload = { text: chunkText, voice: voiceToUse, rate: settings.readAloudRate };
+        payload = { text: chunkText, voice: voiceToUse, rate: spokenRate };
         audioBytes = await postBinary(context, endpoint, payload, { cancellationToken: token });
 
         await context.globalState.update(VOICE_PROVIDER_KEY, providerToUse);
@@ -1379,6 +1740,10 @@ async function readTextAloud(
         vscode.window.showWarningMessage(
           'Premium voice requires ELEVENLABS_API_KEY. Switched to Edge voice (Aria).'
         );
+      }
+
+      if (!stillMine()) {
+        throw new ReadCancelledError();
       }
 
       const uri = vscode.Uri.joinPath(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
@@ -1394,7 +1759,7 @@ async function readTextAloud(
         base64: Buffer.from(audioBytes).toString('base64'),
       });
       files.push(uri.fsPath);
-      latestPlayback = { tracks: tracks.slice(), label };
+      rememberPlayback(tracks, label);
       playbackFiles = files;
 
       if (waitingForChunk !== undefined && waitingForChunk < files.length) {
@@ -1410,11 +1775,16 @@ async function readTextAloud(
         setPlaybackStatus('$(debug-pause)', 'playing');
         logInfo(`Playing first of ${chunks.length} track(s) while generating the rest`);
         playDone = playFilesWithAfplay(files, 0);
+        options?.onStarted?.();
       } else {
         refreshTransport();
       }
     }
     logInfo(`Generated audio tracks: ${tracks.length}`);
+
+    if (!stillMine()) {
+      throw new ReadCancelledError();
+    }
 
     playerProvider?.post({
       type: 'ready',
@@ -1423,12 +1793,15 @@ async function readTextAloud(
       voiceName: context.globalState.get<string>(VOICE_NAME_KEY) || selectedVoiceId,
       provider: selectedProvider,
     });
-    isGeneratingAudio = false;
+    if (stillMine()) {
+      isGeneratingAudio = false;
+    }
     if (playDone) {
       try {
         await playDone;
       } finally {
         if (
+          stillMine() &&
           (playbackState === 'playing' || playbackState === 'paused') &&
           playbackFiles === files
         ) {
@@ -1438,6 +1811,10 @@ async function readTextAloud(
       }
     }
   } catch (error) {
+    if (!stillMine() || isReadCancelled(error)) {
+      logInfo(`readTextAloud cancelled: label=${label}`);
+      throw new ReadCancelledError();
+    }
     expectedTrackCount = playbackFiles.length;
     if (waitingForChunk !== undefined && waitingForChunk >= expectedTrackCount) {
       waitingForChunk = undefined;
@@ -1452,9 +1829,11 @@ async function readTextAloud(
     playerProvider?.post({ type: 'error', label, message });
     throw error;
   } finally {
-    isGeneratingAudio = false;
-    generationCts?.dispose();
-    generationCts = undefined;
+    cts.dispose();
+    if (generationCts === cts) {
+      isGeneratingAudio = false;
+      generationCts = undefined;
+    }
   }
 }
 
@@ -1592,9 +1971,9 @@ async function maybeShowShortcutsTip(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  const clipboard = getShortcutLabel('readClipboardAloud');
+  const editor = getShortcutLabel('readEditorAloud');
   const choice = await vscode.window.showInformationMessage(
-    `Varterm: Copy text, then press ${clipboard} to hear it aloud.`,
+    `Varterm: Highlight text, then press ${editor} to hear it. Nothing is copied.`,
     'Customize shortcuts',
     'Got it'
   );
@@ -1608,7 +1987,9 @@ async function maybeShowShortcutsTip(context: vscode.ExtensionContext): Promise<
 
 function showPlayerNeedText(): void {
   playerProvider?.post({ type: 'needText' });
-  vscode.window.showWarningMessage('Nothing to read. Copy text, then press the Varterm shortcut again.');
+  vscode.window.showWarningMessage(
+    'Nothing to read. Highlight text in the editor, or copy something first.'
+  );
 }
 
 function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<string, unknown>): void {
@@ -1629,7 +2010,7 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
         }
 
         if (message?.type === 'readPasted' && typeof message.text === 'string') {
-          await readTextAloud(context, message.text, 'pasted');
+          await readTextAloud(context, message.text, 'pasted', { replace: true });
           return;
         }
 
@@ -1647,6 +2028,9 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
           logInfo(`Webview player error: ${message.detail}`);
         }
       } catch (error) {
+        if (isReadCancelled(error)) {
+          return;
+        }
         const detail = error instanceof Error ? error.message : 'Unexpected error';
         vscode.window.showErrorMessage(`Varterm: ${detail}`);
       }
@@ -1723,10 +2107,8 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
   }
 
   if (playbackState === 'generating') {
-    generationCts?.cancel();
-    generationCts?.dispose();
-    generationCts = undefined;
-    isGeneratingAudio = false;
+    cancelCurrentRead();
+    stopHostPlayback();
     setIdleStatus();
     return;
   }
@@ -1734,7 +2116,11 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
   const editor = vscode.window.activeTextEditor;
   const selected = editor?.document.getText(editor.selection).trim() || '';
   if (selected) {
-    await readTextAloud(context, selected, 'selection');
+    await readTextAloud(context, selected, 'selection', { replace: true });
+    return;
+  }
+
+  if (await replayWithCurrentSettings(context)) {
     return;
   }
 
@@ -1743,9 +2129,15 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
+  if (lastAgentPlayback?.tracks.length) {
+    latestPlayback = lastAgentPlayback;
+    await playTracksInCursor(context, lastAgentPlayback.tracks);
+    return;
+  }
+
   const lastAgent = readLastAgentText();
   if (lastAgent) {
-    await readTextAloud(context, lastAgent, 'agent reply');
+    await readTextAloud(context, lastAgent, 'agent reply', { replace: true });
     return;
   }
 
@@ -1778,13 +2170,13 @@ async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> 
   const text = selected || fallback;
 
   if (text) {
-    await readTextAloud(context, text, selected ? 'selection' : 'document');
+    await readTextAloud(context, text, selected ? 'selection' : 'document', { replace: true });
     return;
   }
 
   const clipboard = (await vscode.env.clipboard.readText()).trim();
   if (clipboard) {
-    await readTextAloud(context, clipboard, 'clipboard');
+    await readTextAloud(context, clipboard, 'clipboard', { replace: true });
     return;
   }
 
@@ -1794,11 +2186,75 @@ async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> 
 async function readClipboardAloud(context: vscode.ExtensionContext): Promise<void> {
   const clipboard = (await vscode.env.clipboard.readText()).trim();
   if (clipboard) {
-    await readTextAloud(context, clipboard, 'clipboard');
+    await readTextAloud(context, clipboard, 'clipboard', { replace: true });
     return;
   }
 
   showPlayerNeedText();
+}
+
+async function readSelectionAloud(context: vscode.ExtensionContext): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  const selected = editor?.document.getText(editor.selection).trim() || '';
+  if (selected) {
+    await readTextAloud(context, selected, 'selection', { replace: true });
+    return;
+  }
+
+  vscode.window.showWarningMessage('Highlight text in the editor, then try again. Nothing is copied.');
+}
+
+async function readSelectionOrClipboard(context: vscode.ExtensionContext): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  const selected = editor?.document.getText(editor.selection).trim() || '';
+  if (selected) {
+    await readTextAloud(context, selected, 'selection', { replace: true });
+    return;
+  }
+
+  await readClipboardAloud(context);
+}
+
+function diagnosticSeverityLabel(severity: vscode.DiagnosticSeverity): string | undefined {
+  if (severity === vscode.DiagnosticSeverity.Error) {
+    return 'Error';
+  }
+  if (severity === vscode.DiagnosticSeverity.Warning) {
+    return 'Warning';
+  }
+  return undefined;
+}
+
+async function readErrorsAloud(context: vscode.ExtensionContext): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  const entries: Array<[vscode.Uri, readonly vscode.Diagnostic[]]> = editor
+    ? [[editor.document.uri, vscode.languages.getDiagnostics(editor.document.uri)]]
+    : vscode.languages.getDiagnostics();
+
+  const parts: string[] = [];
+  for (const [uri, diagnostics] of entries) {
+    const fileName = editor ? '' : uri.path.split('/').pop() || uri.fsPath;
+    for (const diagnostic of diagnostics) {
+      const severity = diagnosticSeverityLabel(diagnostic.severity);
+      if (!severity) {
+        continue;
+      }
+      const line = diagnostic.range.start.line + 1;
+      const where = fileName
+        ? `${severity} in ${fileName} on line ${line}`
+        : `${severity} on line ${line}`;
+      const message = diagnostic.message.replace(/\s+/g, ' ').trim();
+      parts.push(`${where}: ${message}`);
+    }
+  }
+
+  if (!parts.length) {
+    vscode.window.showInformationMessage('No errors or warnings found.');
+    return;
+  }
+
+  const intro = parts.length === 1 ? 'Found 1 issue.' : `Found ${parts.length} issues.`;
+  await readTextAloud(context, `${intro} ${parts.join('. ')}`, 'diagnostics', { replace: true });
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -1809,7 +2265,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // the Auto-read label used to sit at 79, between the meter and Stop, which
   // split the transport into two halves with a word wedged in the middle.
   //
-  //   jump back | play/pause | stop | jump forward | replay | meter | Auto-read
+  //   jump back | play/pause | stop | jump forward | replay | meter | Auto-read | listen | speed
   const ORDER = {
     jumpBack: 90,
     playPause: 89,
@@ -1818,6 +2274,8 @@ export function activate(context: vscode.ExtensionContext): void {
     replay: 86,
     meter: 85,
     autoRead: 84,
+    listen: 83,
+    speed: 82,
   };
 
   jumpBackBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.jumpBack);
@@ -1857,6 +2315,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(autoReadStatusBar);
   setAutoReadStatus(getAutoReadEnabled(context) || getSettings().autoReadAgentOutput);
 
+  listenBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.listen);
+  listenBar.command = 'vartermCursor.readSelectionOrClipboard';
+  context.subscriptions.push(listenBar);
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection(() => refreshListenBar()),
+    vscode.window.onDidChangeActiveTextEditor(() => refreshListenBar())
+  );
+  refreshListenBar();
+
+  speedBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.speed);
+  speedBar.command = 'vartermCursor.openPlaybackMenu';
+  context.subscriptions.push(speedBar);
+  refreshSpeedBar();
+
   playbackLockWatcher = watchPlaybackLock(handlePlaybackLockChange);
   context.subscriptions.push({ dispose: () => playbackLockWatcher?.dispose() });
   handlePlaybackLockChange();
@@ -1867,6 +2339,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('vartermCursor.showPlayingIndicator')) {
         refreshPlayingIndicator();
+      }
+      if (event.affectsConfiguration('vartermCursor.readAloudRate')) {
+        refreshSpeedBar();
       }
       if (!event.affectsConfiguration('vartermCursor.autoReadAgentOutput')) {
         return;
@@ -1892,6 +2367,9 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           await handler();
         } catch (error) {
+          if (isReadCancelled(error)) {
+            return;
+          }
           const message = error instanceof Error ? error.message : 'Unexpected error';
           vscode.window.showErrorMessage(`Varterm: ${message}`);
         }
@@ -1902,19 +2380,29 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.connect', () => connect(context));
   register('vartermCursor.setElevenLabsApiKey', () => setElevenLabsApiKey(context));
   register('vartermCursor.selectReadAloudVoice', () => selectReadAloudVoice(context));
+  register('vartermCursor.openPlaybackMenu', () => openPlaybackMenu(context));
   register('vartermCursor.readEditorAloud', () => readEditorAloud(context));
   register('vartermCursor.readClipboardAloud', () => readClipboardAloud(context));
+  register('vartermCursor.readSelectionAloud', () => readSelectionAloud(context));
+  register('vartermCursor.readSelectionOrClipboard', () => readSelectionOrClipboard(context));
+  register('vartermCursor.readErrorsAloud', () => readErrorsAloud(context));
   register('vartermCursor.readLastAgentReply', async () => {
+    if (lastAgentPlayback?.tracks.length) {
+      latestPlayback = lastAgentPlayback;
+      await playTracksInCursor(context, lastAgentPlayback.tracks);
+      return;
+    }
     const text = readLastAgentText();
     if (!text) {
       throw new Error('No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.');
     }
-    await readTextAloud(context, text, 'agent reply');
+    await readTextAloud(context, text, 'agent reply', { replace: true });
   });
   register('vartermCursor.openSettings', () => openSettings());
   register('vartermCursor.openKeyboardShortcuts', () => openKeyboardShortcuts());
   register('vartermCursor.clearAudioCache', () => clearAudioCache(context));
   register('vartermCursor.stopPlayback', async () => {
+    cancelCurrentRead();
     stopHostPlayback();
     setIdleStatus();
   });
@@ -1929,6 +2417,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
   register('vartermCursor.replayLast', async () => {
+    if (await replayWithCurrentSettings(context)) {
+      return;
+    }
     if (!latestPlayback?.tracks.length) {
       throw new Error('No audio to replay yet.');
     }

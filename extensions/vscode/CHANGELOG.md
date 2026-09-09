@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.47 - 2026-09-05
+
+### Fixed
+- **Voice preview no longer fires on every arrow key.** That stacked TTS requests, tore down playback, then re-generated the entire last reply when you pressed Enter — it felt like a hang after the first sample. Click the speaker on a voice to hear a short clip. Enter only saves that voice. The last read is re-generated only if something is already playing.
+
+## 0.1.46 - 2026-09-05
+
+### Fixed
+- **Voice picker plays a preview** as you arrow through the list. Enter keeps that voice.
+- **Speed and voice actually change the next listen.** Play used to replay the old MP3, so 1.5× and a new voice sounded the same. Changing either now re-synthesizes the current text.
+
+## 0.1.45 - 2026-09-05
+
+### Added
+- **Speed menu from the status bar.** A `1×` chip sits to the right of the clipboard icon. Click it for 0.75×–2×, voice, and settings. Changing speed while something is playing re-reads it at the new rate.
+
+## 0.1.44 - 2026-09-05
+
+### Added
+- **Read the highlight without copying.** Select text in the editor and click the status bar icon, or right-click **Read Selection Aloud**. The selection is spoken directly.
+- **Read Errors & Warnings Aloud** — speaks diagnostics for the current file (or all files if no editor is focused).
+
+### Changed
+- Store listing now leads with highlight-to-listen. The first-run tip and empty-state copy no longer tell you to copy first.
+
+## 0.1.43 - 2026-09-05
+
+### Added
+- **Clipboard icon in the status bar**, to the right of Auto-read. Click it to read the selection if you have one, otherwise the clipboard. It shows a selection mark when text is highlighted, and a clipboard when it will read what you copied.
+
+## 0.1.42 - 2026-09-05
+
+### Added
+- **Speaker in the editor toolbar.** It reads the selection if you have one, otherwise the clipboard. Right-click the editor for Read Selection or Read Clipboard on their own.
+
+## 0.1.41 - 2026-09-05
+
+### Fixed
+- **Auto-read comes back after clipboard or paste.** Reading copied or pasted text used to steal the speaker and never give it back: the next finished agent reply was cancelled by the clipboard read cleaning up, and Play kept replaying the paste. Clipboard and paste still interrupt whatever is playing — that is what you asked for — but the next finished reply takes the speaker again. You do not need to toggle Auto-read.
+- **Read Last Agent Reply still finds the agent** after a clipboard or paste listen. Manual audio and agent audio are remembered separately, so a paste cannot hide the last reply.
+
+### Changed
+- Clipboard, pasted text, selection, and editor reads now replace the current clip immediately. No more “Wait / Cancel and start over” prompt when you already chose something else to hear.
+
 ## 0.1.40 - 2026-08-25
 
 ### Fixed

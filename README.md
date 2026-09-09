@@ -2,14 +2,17 @@
 
 Source for the Varterm editor and browser extensions. MIT licensed.
 
-The editor extension ships **Agent Auto-read**: finished Cursor agent replies play while you keep working. One install, every window, zero echo. Long replies split into parts you can jump through, so you skip the preamble instead of scrolling the chat. Same engine reads whole files, RFCs, and multi-page docs — playback starts on part one while the rest generates.
+The editor extension ships **highlight-to-listen** (select text, no copy) and **Agent Auto-read**: finished Cursor agent replies play while you keep working. One install, every window, zero echo. Long replies split into parts you can jump through, so you skip the preamble instead of scrolling the chat. Same engine reads whole files, RFCs, and multi-page docs — playback starts on part one while the rest generates.
 
 
 ## Repository Layout
 
 - `extensions/chrome` - Chrome extension source and packaging script.
 - `extensions/vscode` - VS Code extension source and packaging script.
+- `plugins/claude-code` - Claude Code plugin that reads replies aloud.
 - `packages/tts-client` - shared API client used by extension surfaces.
+- `.claude-plugin/marketplace.json` - makes this repo a Claude Code plugin
+  marketplace, so `claude plugin marketplace add varterm/extensions` works.
 
 ## Build and Package
 
@@ -26,6 +29,14 @@ bash package.sh
 cd extensions/vscode
 npm ci
 npm run package
+```
+
+### Claude Code Plugin
+
+Nothing to build. Load it straight from the checkout:
+
+```bash
+claude --plugin-dir plugins/claude-code
 ```
 
 ## Releases

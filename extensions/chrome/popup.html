@@ -10,7 +10,9 @@
     }
     
     body {
-      width: 320px;
+      width: 340px;
+      max-height: 600px;
+      overflow-y: auto;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #0a0a0b;
       color: #f4f4f5;
@@ -109,6 +111,45 @@
       color: #9ca3af;
       margin-top: 4px;
     }
+
+    .speed-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .speed-chip {
+      flex: 1;
+      padding: 6px 4px;
+      background: #1a1a1d;
+      color: #d1d5db;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .speed-chip.active {
+      background: rgba(16, 185, 129, 0.2);
+      color: #6ee7b7;
+      border-color: #10b981;
+    }
+
+    .transport {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .transport button {
+      flex: 1;
+    }
+
+    .auto-read-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
     
     .checkbox-group {
       display: flex;
@@ -127,9 +168,16 @@
       font-size: 13px;
       color: #f4f4f5;
     }
+
+    .hint {
+      margin: 4px 0 0 24px;
+      font-size: 11px;
+      color: #9ca3af;
+    }
     
     .actions {
       display: flex;
+      flex-direction: column;
       gap: 8px;
       margin-top: 16px;
     }
@@ -240,7 +288,16 @@
     <div id="status" class="status"></div>
     
     <div class="section">
-      <div class="section-title">Voice Settings</div>
+      <div class="section-title">Playback</div>
+      <div class="transport">
+        <button class="btn-secondary" id="jumpBack" title="Jump back one part">⏮ Back</button>
+        <button class="btn-secondary" id="pause" title="Pause or resume">⏸ Pause</button>
+        <button class="btn-secondary" id="jumpForward" title="Jump forward one part">⏭ Ahead</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Voice &amp; Speed</div>
       
       <div class="input-group">
         <label for="voiceTier">Voice Tier</label>
@@ -252,19 +309,13 @@
       
       <div class="input-group" id="voiceGroup">
         <label for="voice">Voice</label>
-        <select id="voice">
-          <option value="en-US-AriaNeural">Aria (US, Friendly)</option>
-          <option value="en-US-JennyNeural">Jenny (US, Warm)</option>
-          <option value="en-US-GuyNeural">Guy (US, Casual)</option>
-          <option value="en-US-DavisNeural">Davis (US, Calm)</option>
-          <option value="en-GB-SoniaNeural">Sonia (UK, Warm)</option>
-          <option value="en-GB-RyanNeural">Ryan (UK, Professional)</option>
-          <option value="en-AU-NatashaNeural">Natasha (AU, Friendly)</option>
-        </select>
+        <!-- Filled from voices.js so the popup and the reader panel cannot drift apart. -->
+        <select id="voice"></select>
       </div>
       
       <div class="input-group">
-        <label for="rate">Speed</label>
+        <label>Speed</label>
+        <div class="speed-row" id="speedChips"></div>
         <input type="range" id="rate" min="0.5" max="2" step="0.1" value="1">
         <div class="rate-display"><span id="rateValue">1.0</span>x</div>
       </div>
@@ -274,9 +325,18 @@
         <label for="stripMarkdown">Strip markdown formatting</label>
       </div>
     </div>
+
+    <div class="section">
+      <div class="section-title">Read AI replies</div>
+      <div class="auto-read-list" id="autoReadList"></div>
+      <div class="hint" id="autoReadHint">Asks Chrome for that site the first time. If the popup closes, allow it under the extension’s Site access, then tick again.</div>
+    </div>
     
     <div class="actions">
       <button class="btn-primary" id="readSelection">▶ Read Selection</button>
+      <button class="btn-secondary" id="readYouTube" style="display:none">▶ Read Video Transcript</button>
+      <div class="hint" id="youtubeHint" style="display:none; margin: 0 0 4px 0;">Opens a searchable transcript. Type to find a moment, click a timestamp to jump the video.</div>
+      <button class="btn-secondary" id="readChat" style="display:none">▶ Read Last Reply</button>
       <button class="btn-secondary" id="stop">⏹ Stop</button>
     </div>
   </div>
@@ -284,7 +344,7 @@
   <div class="shortcuts">
     <div class="shortcut">
       <span>Read selection</span>
-      <kbd>Ctrl+Shift+R</kbd>
+      <kbd>Alt+Shift+R</kbd>
     </div>
     <div class="shortcut">
       <span>Stop speaking</span>
@@ -296,6 +356,8 @@
     <a href="https://varterm.com/extensions" target="_blank">Open setup guides →</a>
   </div>
   
+  <script src="sites.js"></script>
+  <script src="voices.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

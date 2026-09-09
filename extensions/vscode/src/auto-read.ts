@@ -129,15 +129,20 @@ function tryClaimAutoReadEvent(ts: number): boolean {
 }
 
 export function watchAgentDropFile(
-  onText: (text: string) => void,
+  onText: (text: string, markHeard: () => void) => void | Promise<void>,
   log: (message: string) => void
 ): { dispose: () => void } {
   const filePath = agentDropPath();
   const dirPath = path.dirname(filePath);
   fs.mkdirSync(dirPath, { recursive: true });
   let lastTs = 0;
+  let inFlightTs = 0;
+  let disposed = false;
   let debounce: ReturnType<typeof setTimeout> | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const pendingClaims = new Set<ReturnType<typeof setTimeout>>();
+  const claimedHere = new Set<number>();
+  const retried = new Set<number>();
 
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -146,6 +151,21 @@ export function watchAgentDropFile(
   } catch {
     lastTs = 0;
   }
+
+  const markHeardTs = (ts: number): void => {
+    if (ts > lastTs) {
+      lastTs = ts;
+    }
+  };
+
+  const isCancelled = (error: unknown): boolean => {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+    const name = 'name' in error ? String(error.name) : '';
+    const message = 'message' in error ? String(error.message) : '';
+    return name === 'ReadCancelledError' || message === 'Cancelled' || message === 'Operation cancelled';
+  };
 
   const handle = (): void => {
     if (debounce) {
@@ -156,22 +176,69 @@ export function watchAgentDropFile(
         const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as AgentDrop;
         const ts = Number(parsed.ts) || 0;
         const text = stripForSpeech(parsed.text || '');
-        if (!text || ts <= lastTs || text.length < 8) {
+        if (!text || ts <= lastTs || ts === inFlightTs || text.length < 8) {
           return;
         }
-        lastTs = ts;
+        inFlightTs = ts;
         const delay = claimDelayMs(parsed);
         log(
           `Auto-read saw ${text.length} chars focused=${vscode.window.state.focused} owns=${windowOwnsDrop(parsed)} delay=${delay}ms`
         );
         const claimTimer = setTimeout(() => {
           pendingClaims.delete(claimTimer);
-          if (!tryClaimAutoReadEvent(ts)) {
-            log('Auto-read skipped: another window already claimed this reply');
+          if (disposed) {
+            if (inFlightTs === ts) {
+              inFlightTs = 0;
+            }
             return;
           }
+          if (!claimedHere.has(ts) && !tryClaimAutoReadEvent(ts)) {
+            log('Auto-read skipped: another window already claimed this reply');
+            markHeardTs(ts);
+            if (inFlightTs === ts) {
+              inFlightTs = 0;
+            }
+            return;
+          }
+          claimedHere.add(ts);
           log(`Auto-read playing in this window (${text.length} chars)`);
-          onText(text);
+          let heard = false;
+          const markHeard = () => {
+            heard = true;
+            markHeardTs(ts);
+          };
+          void Promise.resolve(onText(text, markHeard)).then(
+            () => {
+              markHeardTs(ts);
+              if (inFlightTs === ts) {
+                inFlightTs = 0;
+              }
+            },
+            (error) => {
+              if (heard || isCancelled(error)) {
+                markHeardTs(ts);
+                if (inFlightTs === ts) {
+                  inFlightTs = 0;
+                }
+                if (isCancelled(error)) {
+                  log('Auto-read replaced by another read');
+                }
+                return;
+              }
+              const message = error instanceof Error ? error.message : String(error);
+              log(`Auto-read play error: ${message}`);
+              if (inFlightTs === ts) {
+                inFlightTs = 0;
+              }
+              if (!retried.has(ts) && !disposed) {
+                retried.add(ts);
+                log('Auto-read will retry this reply once');
+                retryTimer = setTimeout(handle, 1200);
+                return;
+              }
+              markHeardTs(ts);
+            }
+          );
         }, delay);
         pendingClaims.add(claimTimer);
       } catch (error) {
@@ -191,8 +258,12 @@ export function watchAgentDropFile(
 
   return {
     dispose: () => {
+      disposed = true;
       if (debounce) {
         clearTimeout(debounce);
+      }
+      if (retryTimer) {
+        clearTimeout(retryTimer);
       }
       for (const timer of pendingClaims) {
         clearTimeout(timer);
