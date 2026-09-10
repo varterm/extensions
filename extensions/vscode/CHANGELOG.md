@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.49 - 2026-09-10
+
+### Fixed
+- **Play keeps the last file highlight.** Clicking the status bar used to drop the editor selection, so Play skipped the text you just marked. Chat and agent highlights still cannot be read — copy those, or use Auto-read.
+
+## 0.1.48 - 2026-09-10
+
+### Fixed
+- **Auto-read is per window.** Turning it on or off in the status bar no longer writes the user setting, so other Cursor windows keep their own state.
+
 ## 0.1.47 - 2026-09-05
 
 ### Fixed

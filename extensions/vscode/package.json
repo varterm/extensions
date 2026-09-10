@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.47",
+  "version": "0.1.49",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -247,7 +247,7 @@
         "vartermCursor.autoReadAgentOutput": {
           "type": "boolean",
           "default": false,
-          "description": "When on, play new assistant replies aloud when they finish. Toggle from the Auto-read status bar item. Pause, replay, or stop from the player item."
+          "description": "Default Auto-read for a workspace that has not used the status bar toggle yet. The status bar is per window and does not change other windows."
         },
         "vartermCursor.readAloudVoice": {
           "type": "string",

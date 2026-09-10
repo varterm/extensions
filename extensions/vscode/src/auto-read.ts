@@ -8,8 +8,28 @@ const RELATIVE_HOOK_COMMAND = './hooks/varterm-autoread.py';
 
 type AgentDrop = { text?: string; ts?: number; cwd?: string; workspace?: string };
 
-export function getAutoReadEnabled(context: vscode.ExtensionContext): boolean {
-  return Boolean(context.globalState.get<boolean>(AUTO_READ_KEY));
+/** This extension host / window only. Do not read settings or globalState here. */
+let thisWindowEnabled = false;
+
+export function getAutoReadEnabled(_context?: vscode.ExtensionContext): boolean {
+  return thisWindowEnabled;
+}
+
+export function loadAutoReadEnabled(
+  context: vscode.ExtensionContext,
+  settingsDefault: boolean
+): boolean {
+  const stored = context.workspaceState.get<boolean | undefined>(AUTO_READ_KEY);
+  thisWindowEnabled = typeof stored === 'boolean' ? stored : settingsDefault;
+  return thisWindowEnabled;
+}
+
+export async function persistAutoReadEnabled(
+  context: vscode.ExtensionContext,
+  enabled: boolean
+): Promise<void> {
+  thisWindowEnabled = enabled;
+  await context.workspaceState.update(AUTO_READ_KEY, enabled);
 }
 
 export function agentDropPath(): string {

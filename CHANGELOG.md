@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.49 - 2026-09-10
+
+### Fixed
+- Play remembers the last file highlight so clicking the status bar still reads it.
+
+## 0.1.48 - 2026-09-10
+
+### Fixed
+- **Auto-read is per window.** The status bar toggle no longer flips every open Cursor window.
+
 ## 0.1.47 - 2026-09-05
 
 ### Fixed

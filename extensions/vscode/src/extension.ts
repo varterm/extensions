@@ -16,6 +16,8 @@ import {
   AUTO_READ_KEY,
   getAutoReadEnabled,
   installVartermAgentHook,
+  loadAutoReadEnabled,
+  persistAutoReadEnabled,
   readLastAgentText,
   watchAgentDropFile,
 } from './auto-read';
@@ -242,7 +244,9 @@ function refreshTransport(): void {
       statusBar.tooltip = 'Play here — stops the Cursor window that is playing now';
     } else {
       statusBar.text = '$(play)';
-      statusBar.tooltip = 'Play';
+      statusBar.tooltip = editorHasSelection()
+        ? 'Play the highlighted text'
+        : 'Play the highlight, last listen, or clipboard';
     }
     statusBar.command = 'vartermCursor.statusBarAction';
     statusBar.show();
@@ -292,9 +296,26 @@ function refreshTransport(): void {
   refreshListenBar();
 }
 
-function editorHasSelection(): boolean {
+let rememberedSelection = '';
+
+function currentEditorSelection(): string {
   const editor = vscode.window.activeTextEditor;
-  return Boolean(editor?.document.getText(editor.selection).trim());
+  return editor?.document.getText(editor.selection).trim() || '';
+}
+
+function rememberEditorSelection(): void {
+  const selected = currentEditorSelection();
+  if (selected) {
+    rememberedSelection = selected;
+  }
+}
+
+function selectionToRead(): string {
+  return currentEditorSelection() || rememberedSelection;
+}
+
+function editorHasSelection(): boolean {
+  return Boolean(selectionToRead());
 }
 
 function formatSpeed(rate: number): string {
@@ -399,6 +420,7 @@ function refreshListenBar(): void {
   if (!listenBar) {
     return;
   }
+  rememberEditorSelection();
   const selected = editorHasSelection();
   listenBar.text = selected ? '$(selection)' : '$(clippy)';
   listenBar.tooltip = selected
@@ -456,8 +478,8 @@ function setAutoReadStatus(enabled: boolean): void {
   }
   autoReadStatusBar.text = enabled ? '$(unmute) Auto-read on' : '$(mute) Auto-read off';
   autoReadStatusBar.tooltip = enabled
-    ? 'On: when an assistant reply finishes, Varterm reads it. Click to turn off.'
-    : 'Off: click to auto-read assistant replies when they finish.';
+    ? 'On in this window: when an assistant reply finishes, Varterm reads it. Click to turn off.'
+    : 'Off in this window. Click to auto-read assistant replies here when they finish.';
   autoReadStatusBar.show();
 }
 
@@ -475,12 +497,9 @@ async function tryUpdateUserSetting(key: string, value: unknown): Promise<void> 
 async function setAutoReadEnabled(
   context: vscode.ExtensionContext,
   enabled: boolean,
-  options?: { persistSettings?: boolean }
+  _options?: { persistSettings?: boolean }
 ): Promise<void> {
-  await context.globalState.update(AUTO_READ_KEY, enabled);
-  if (options?.persistSettings !== false) {
-    await tryUpdateUserSetting('autoReadAgentOutput', enabled);
-  }
+  await persistAutoReadEnabled(context, enabled);
   setAutoReadStatus(enabled);
 
   autoReadWatcher?.dispose();
@@ -515,7 +534,9 @@ async function setAutoReadEnabled(
 async function toggleAutoRead(context: vscode.ExtensionContext): Promise<void> {
   const next = !getAutoReadEnabled(context);
   await setAutoReadEnabled(context, next);
-  vscode.window.showInformationMessage(next ? 'Auto-read on. Finished replies will play.' : 'Auto-read off.');
+  vscode.window.showInformationMessage(
+    next ? 'Auto-read on in this window. Finished replies will play here.' : 'Auto-read off in this window.'
+  );
 }
 
 function forceKillChild(child: ChildProcess): void {
@@ -2113,8 +2134,7 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  const editor = vscode.window.activeTextEditor;
-  const selected = editor?.document.getText(editor.selection).trim() || '';
+  const selected = selectionToRead();
   if (selected) {
     await readTextAloud(context, selected, 'selection', { replace: true });
     return;
@@ -2165,7 +2185,7 @@ async function maybeShowAutoReadTip(context: vscode.ExtensionContext): Promise<v
 
 async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> {
   const editor = vscode.window.activeTextEditor;
-  const selected = editor?.document.getText(editor.selection).trim() || '';
+  const selected = selectionToRead();
   const fallback = editor?.document.getText().trim() || '';
   const text = selected || fallback;
 
@@ -2194,19 +2214,19 @@ async function readClipboardAloud(context: vscode.ExtensionContext): Promise<voi
 }
 
 async function readSelectionAloud(context: vscode.ExtensionContext): Promise<void> {
-  const editor = vscode.window.activeTextEditor;
-  const selected = editor?.document.getText(editor.selection).trim() || '';
+  const selected = selectionToRead();
   if (selected) {
     await readTextAloud(context, selected, 'selection', { replace: true });
     return;
   }
 
-  vscode.window.showWarningMessage('Highlight text in the editor, then try again. Nothing is copied.');
+  vscode.window.showWarningMessage(
+    'Highlight text in a file, then press Play. Chat and agent panels cannot be read from a highlight — copy, then use the clipboard icon.'
+  );
 }
 
 async function readSelectionOrClipboard(context: vscode.ExtensionContext): Promise<void> {
-  const editor = vscode.window.activeTextEditor;
-  const selected = editor?.document.getText(editor.selection).trim() || '';
+  const selected = selectionToRead();
   if (selected) {
     await readTextAloud(context, selected, 'selection', { replace: true });
     return;
@@ -2313,7 +2333,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   autoReadStatusBar.command = 'vartermCursor.toggleAutoRead';
   context.subscriptions.push(autoReadStatusBar);
-  setAutoReadStatus(getAutoReadEnabled(context) || getSettings().autoReadAgentOutput);
+  setAutoReadStatus(loadAutoReadEnabled(context, getSettings().autoReadAgentOutput));
 
   listenBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.listen);
   listenBar.command = 'vartermCursor.readSelectionOrClipboard';
@@ -2344,6 +2364,12 @@ export function activate(context: vscode.ExtensionContext): void {
         refreshSpeedBar();
       }
       if (!event.affectsConfiguration('vartermCursor.autoReadAgentOutput')) {
+        return;
+      }
+      // Status bar is per-window. Do not copy a settings.json write from
+      // another window. Only honor the setting before this workspace has a
+      // local toggle stored.
+      if (context.workspaceState.get(AUTO_READ_KEY) !== undefined) {
         return;
       }
       const enabled = getSettings().autoReadAgentOutput;
@@ -2438,7 +2464,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void pruneAudioCache(context);
   void maybeShowShortcutsTip(context);
   void maybeShowAutoReadTip(context);
-  if (getAutoReadEnabled(context) || getSettings().autoReadAgentOutput) {
+  if (getAutoReadEnabled(context)) {
     void setAutoReadEnabled(context, true, { persistSettings: false });
   }
 }

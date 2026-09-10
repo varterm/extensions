@@ -14,12 +14,12 @@ More at [varterm.com/extensions](https://varterm.com/extensions).
 
 ## Highlight to listen
 
-Select text in a file and press the clipboard / selection icon to the right of Auto-read. The highlight is read directly. Copy is only used when nothing is selected.
+Select text **in a file** and press **Play**, or the selection / clipboard icon to the right of Auto-read. The highlight is read directly. Copy is only used when nothing is selected.
 
 - Right-click a selection → **Read Selection Aloud**.
 - The status bar icon turns into a selection mark while text is highlighted, and a clipboard when it will read what you copied.
 - Click the **speed** chip (`1×`) at the end of that row for a menu: 0.75×–2×, voice, and settings. In the voice list, click the speaker to preview; Enter uses that voice.
-- Chat highlights are not readable (webview). Auto-read captures the finished reply instead.
+- **Chat and agent panels cannot be highlighted into speech.** Those views are not editor text. Copy the reply, then click the clipboard icon — or turn on Auto-read so the finished reply plays itself.
 
 ## Agent Auto-read
 
@@ -74,7 +74,7 @@ Change or remove them with **`Varterm: Customize Keyboard Shortcuts`**.
 Everything lives under `vartermCursor.*`:
 
 - `readAloudVoice`, `readAloudRate`, `readAloudProvider` — voice, speed, Edge or Premium. Speed is also the `1×` chip on the status bar.
-- `autoReadAgentOutput` — same as the status bar toggle.
+- `autoReadAgentOutput` — default for a workspace before you use the status bar. The Auto-read chip is per window.
 - `showPlayingIndicator` — the animated meter in the status bar (default on).
 - `resumeRewindMs` — how far resume rewinds after a pause (default 600ms) so no words are lost at the join.
 - `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
