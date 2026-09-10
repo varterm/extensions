@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.55 - 2026-09-10
+
+### Fixed
+- Auto-read no longer steals another window’s speaker. A finished reply waits in that window’s queue if another Cursor window is already playing. Only Play takes the speaker.
+
+## 0.1.54 - 2026-09-10
+
+### Added
+- Status-bar listen queue: agent replies wait instead of cutting off the current listen. Click the list icon to go back or play the next item.
+
+## 0.1.51 - 2026-09-10
+
+### Fixed
+- Selection button ignores leftover clipboard text when a plan highlight cannot be read.
+
+## 0.1.50 - 2026-09-10
+
+### Fixed
+- Selection button can read a Cursor build plan without a manual copy.
+
+## Chrome 1.4.3 - 2026-09-10
+
+Same build as 1.4.2. Version bump so the Chrome Web Store will accept a new zip.
+
 ## 0.1.49 - 2026-09-10
 
 ### Fixed

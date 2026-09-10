@@ -77,11 +77,29 @@ export function readLastAgentText(): string {
 
 export function stripForSpeech(text: string): string {
   return text
+    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^[ \t]*#{1,6}[ \t]*/gm, '')
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/___([^_]+)___/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/^[ \t]*>[ \t]?/gm, '')
+    .replace(/^[ \t]*(?:[-*_]){3,}[ \t]*$/gm, '')
+    .replace(/^[ \t]*[-*+][ \t]+(?:\[[ xX]\][ \t]+)?/gm, '')
+    .replace(/^[ \t]*\d+\.[ \t]+/gm, '')
+    .replace(/\|/g, ' ')
+    .replace(/\\([\\`*_{}[\]()#+\-.!|>])/g, '$1')
+    .replace(/\\[ \t]*$/gm, '')
+    .replace(/<[^>]+>/g, '')
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+/g, ' ')
     .trim();
 }
 

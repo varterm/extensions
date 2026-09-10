@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Varterm TTS - Text to Speech",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Read pages, YouTube transcripts, and AI chats aloud. Search, jump, change speed, and hear new replies as they arrive.",
   "permissions": [
     "activeTab",

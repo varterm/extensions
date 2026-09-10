@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { createTtsHttpClient } from '@varterm/tts-client';
 import { sliceMp3FromMs } from './mp3';
@@ -19,6 +22,7 @@ import {
   loadAutoReadEnabled,
   persistAutoReadEnabled,
   readLastAgentText,
+  stripForSpeech,
   watchAgentDropFile,
 } from './auto-read';
 
@@ -123,6 +127,7 @@ let jumpForwardBar: vscode.StatusBarItem | undefined;
 let replayBar: vscode.StatusBarItem | undefined;
 let autoReadStatusBar: vscode.StatusBarItem | undefined;
 let listenBar: vscode.StatusBarItem | undefined;
+let queueBar: vscode.StatusBarItem | undefined;
 let speedBar: vscode.StatusBarItem | undefined;
 let playingIndicator: vscode.StatusBarItem | undefined;
 let indicatorTimer: ReturnType<typeof setInterval> | undefined;
@@ -132,6 +137,8 @@ let playbackLockWatcher: { dispose: () => void } | undefined;
 // Another Cursor window that currently holds playback, so this window can show
 // what is going on instead of looking idle.
 let otherWindow: PlaybackOwner | undefined;
+/** User Play steals the speaker. Auto-read must not. */
+let playbackClaimSteals = true;
 let outputChannel: vscode.OutputChannel | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 
@@ -294,13 +301,24 @@ function refreshTransport(): void {
 
   refreshPlayingIndicator();
   refreshListenBar();
+  refreshQueueBar();
 }
 
 let rememberedSelection = '';
 
 function currentEditorSelection(): string {
   const editor = vscode.window.activeTextEditor;
-  return editor?.document.getText(editor.selection).trim() || '';
+  const fromActive = editor?.document.getText(editor.selection).trim() || '';
+  if (fromActive) {
+    return fromActive;
+  }
+  for (const visible of vscode.window.visibleTextEditors) {
+    const text = visible.document.getText(visible.selection).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return '';
 }
 
 function rememberEditorSelection(): void {
@@ -314,8 +332,277 @@ function selectionToRead(): string {
   return currentEditorSelection() || rememberedSelection;
 }
 
+function tabResourceUri(tab: vscode.Tab | undefined): vscode.Uri | undefined {
+  const input = tab?.input;
+  if (!input || typeof input !== 'object') {
+    return undefined;
+  }
+  if ('uri' in input && input.uri instanceof vscode.Uri) {
+    return input.uri;
+  }
+  if (input instanceof vscode.TabInputTextDiff) {
+    return input.modified;
+  }
+  return undefined;
+}
+
+function isNonTextEditorTab(tab: vscode.Tab | undefined): boolean {
+  if (!tab) {
+    return false;
+  }
+  if (
+    tab.input instanceof vscode.TabInputCustom ||
+    tab.input instanceof vscode.TabInputWebview ||
+    tab.input instanceof vscode.TabInputNotebook
+  ) {
+    return true;
+  }
+  return /plan/i.test(tab.label);
+}
+
+function isMarkdownUri(uri: vscode.Uri | undefined): boolean {
+  if (!uri) {
+    return false;
+  }
+  return /\.(md|plan\.md|markdown)$/i.test(uri.path);
+}
+
+function tabLooksLikePlan(tab: vscode.Tab | undefined): boolean {
+  if (!tab) {
+    return false;
+  }
+  if (/plan/i.test(tab.label)) {
+    return true;
+  }
+  const input = tab.input;
+  if (input instanceof vscode.TabInputCustom) {
+    if (/plan/i.test(input.viewType) || isMarkdownUri(input.uri)) {
+      return true;
+    }
+  }
+  if (input instanceof vscode.TabInputWebview && /plan/i.test(input.viewType)) {
+    return true;
+  }
+  const uri = tabResourceUri(tab);
+  if (!uri) {
+    return false;
+  }
+  return (
+    isMarkdownUri(uri) &&
+    (/\.plan\.md$/i.test(uri.path) ||
+      /\/\.?cursor\/.*plan/i.test(uri.path) ||
+      /plan/i.test(uri.scheme) ||
+      input instanceof vscode.TabInputCustom)
+  );
+}
+
 function editorHasSelection(): boolean {
-  return Boolean(selectionToRead());
+  return Boolean(selectionToRead()) || isNonTextEditorTab(vscode.window.tabGroups.activeTabGroup.activeTab);
+}
+
+function stripPlanChrome(text: string): string {
+  return text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let clipboardSnapshot = '';
+
+async function snapshotClipboard(): Promise<void> {
+  try {
+    clipboardSnapshot = await vscode.env.clipboard.readText();
+  } catch {
+    clipboardSnapshot = '';
+  }
+}
+
+async function freshClipboardText(): Promise<string> {
+  const text = await vscode.env.clipboard.readText();
+  if (text && text !== clipboardSnapshot) {
+    clipboardSnapshot = text;
+    return text.trim();
+  }
+  return '';
+}
+
+function currentEditorLine(): string {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !editor.selection.isEmpty) {
+    return '';
+  }
+  return editor.document.lineAt(editor.selection.active.line).text.trim();
+}
+
+async function copyFocusedHighlight(): Promise<string> {
+  const before = await vscode.env.clipboard.readText();
+  const sentinel = `\u200bvarterm-sel-${Date.now()}`;
+  const ignoreLine = currentEditorLine();
+  await vscode.env.clipboard.writeText(sentinel);
+
+  const attemptCopy = async (): Promise<string> => {
+    try {
+      await vscode.commands.executeCommand('copy');
+    } catch {
+      return '';
+    }
+    await delay(60);
+    const after = await vscode.env.clipboard.readText();
+    if (!after || after === sentinel) {
+      return '';
+    }
+    if (ignoreLine && after.trim() === ignoreLine) {
+      return '';
+    }
+    return after.trim();
+  };
+
+  let copied = await attemptCopy();
+  if (!copied) {
+    for (const command of ['workbench.action.focusAuxiliaryBar', 'workbench.action.focusPanel']) {
+      try {
+        await vscode.commands.executeCommand(command);
+      } catch {
+        // Command may not exist in this host.
+      }
+    }
+    await delay(60);
+    copied = await attemptCopy();
+  }
+
+  try {
+    await vscode.env.clipboard.writeText(before);
+    clipboardSnapshot = before;
+  } catch {
+    // Keep whatever is on the clipboard if restore fails.
+  }
+  return copied;
+}
+
+async function readUriText(uri: vscode.Uri): Promise<string> {
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    return stripPlanChrome(doc.getText());
+  } catch {
+    try {
+      return stripPlanChrome(await readFile(uri.fsPath, 'utf8'));
+    } catch {
+      return '';
+    }
+  }
+}
+
+function normalizePlanKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\.plan\.md$/i, '')
+    .replace(/\.md$/i, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+async function collectPlanDirs(): Promise<string[]> {
+  const dirs = [path.join(os.homedir(), '.cursor', 'plans')];
+  for (const folder of vscode.workspace.workspaceFolders || []) {
+    dirs.push(path.join(folder.uri.fsPath, '.cursor', 'plans'));
+  }
+  return dirs;
+}
+
+async function textFromPlanDisk(tab: vscode.Tab | undefined): Promise<string> {
+  const labelKey = tab?.label ? normalizePlanKey(tab.label) : '';
+  const uriKey = normalizePlanKey(tabResourceUri(tab)?.path || '');
+  let newest = { mtime: 0, text: '' };
+
+  for (const dir of await collectPlanDirs()) {
+    let names: string[] = [];
+    try {
+      names = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!/\.(md|plan\.md)$/i.test(name)) {
+        continue;
+      }
+      const full = path.join(dir, name);
+      const nameKey = normalizePlanKey(name);
+      const matches =
+        (labelKey && (nameKey.includes(labelKey) || labelKey.includes(nameKey))) ||
+        (uriKey && (nameKey.includes(uriKey) || uriKey.includes(nameKey)));
+      if (!matches && (labelKey || uriKey)) {
+        continue;
+      }
+      try {
+        const info = await stat(full);
+        const text = stripPlanChrome(await readFile(full, 'utf8'));
+        if (!text) {
+          continue;
+        }
+        if (!labelKey && !uriKey) {
+          if (info.mtimeMs > newest.mtime) {
+            newest = { mtime: info.mtimeMs, text };
+          }
+          continue;
+        }
+        if (info.mtimeMs > newest.mtime) {
+          newest = { mtime: info.mtimeMs, text };
+        }
+      } catch {
+        // Skip unreadable plan files.
+      }
+    }
+  }
+  return newest.text;
+}
+
+async function textFromPlanTab(): Promise<string> {
+  const tabs = [
+    vscode.window.tabGroups.activeTabGroup.activeTab,
+    ...vscode.window.tabGroups.all.map((group) => group.activeTab),
+  ].filter((tab): tab is vscode.Tab => {
+    if (!tab) {
+      return false;
+    }
+    return (
+      tabLooksLikePlan(tab) ||
+      isNonTextEditorTab(tab) ||
+      isMarkdownUri(tabResourceUri(tab))
+    );
+  });
+  if (!tabs.length) {
+    return '';
+  }
+  for (const tab of tabs) {
+    const uri = tabResourceUri(tab);
+    if (uri) {
+      const fromUri = await readUriText(uri);
+      if (fromUri) {
+        return fromUri;
+      }
+    }
+    const fromDisk = await textFromPlanDisk(tab);
+    if (fromDisk) {
+      return fromDisk;
+    }
+  }
+  return '';
+}
+
+async function resolveHighlightedText(): Promise<{ text: string; label: string } | undefined> {
+  const selected = selectionToRead();
+  if (selected) {
+    return { text: selected, label: 'selection' };
+  }
+  const copied = await copyFocusedHighlight();
+  if (copied) {
+    return { text: copied, label: 'selection' };
+  }
+  const plan = await textFromPlanTab();
+  if (plan) {
+    return { text: plan, label: 'plan' };
+  }
+  return undefined;
 }
 
 function formatSpeed(rate: number): string {
@@ -422,12 +709,248 @@ function refreshListenBar(): void {
   }
   rememberEditorSelection();
   const selected = editorHasSelection();
-  listenBar.text = selected ? '$(selection)' : '$(clippy)';
-  listenBar.tooltip = selected
-    ? 'Read the highlighted selection (nothing is copied)'
-    : 'Highlight text to read it, or click to read the clipboard';
+  const planTab = tabLooksLikePlan(vscode.window.tabGroups.activeTabGroup.activeTab);
+  listenBar.text = selected || planTab ? '$(selection)' : '$(clippy)';
+  listenBar.tooltip = planTab
+    ? 'Read the highlighted plan text (or the whole plan if the highlight is in the plan view)'
+    : selected
+      ? 'Read the highlighted selection (nothing is copied)'
+      : 'Highlight text to read it, or click to read the clipboard';
   listenBar.command = 'vartermCursor.readSelectionOrClipboard';
   listenBar.show();
+}
+
+type QueuedListen = {
+  id: string;
+  text: string;
+  label: string;
+  tracks?: AudioTrack[];
+  index?: number;
+  offsetMs?: number;
+};
+
+const listenQueue: QueuedListen[] = [];
+const listenHistory: QueuedListen[] = [];
+let advancingQueue = false;
+
+function isPlaybackBusy(): boolean {
+  return (
+    playbackState === 'playing' ||
+    playbackState === 'paused' ||
+    playbackState === 'generating' ||
+    isGeneratingAudio ||
+    Boolean(playbackProcess)
+  );
+}
+
+function anotherWindowOwnsPlayback(): boolean {
+  return ownedByAnotherWindow(readPlaybackOwner());
+}
+
+function listenPreview(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact.length > 72 ? `${compact.slice(0, 71)}…` : compact;
+}
+
+function currentListenSnapshot(): QueuedListen | undefined {
+  const text = latestSpoken?.text || '';
+  const label = latestSpoken?.label || latestPlayback?.label || 'audio';
+  if (!text && !latestPlayback?.tracks.length) {
+    return undefined;
+  }
+  const offset =
+    playbackState === 'paused'
+      ? pausedOffsetMs ?? 0
+      : playbackState === 'playing'
+        ? Math.max(0, currentChunkPositionMs() - getSettings().resumeRewindMs)
+        : 0;
+  return {
+    id: `now-${Date.now()}`,
+    text,
+    label,
+    tracks: latestPlayback?.tracks.slice(),
+    index: playbackIndex,
+    offsetMs: offset,
+  };
+}
+
+function enqueueListen(item: Omit<QueuedListen, 'id'>): boolean {
+  const text = item.text.trim();
+  if (!text) {
+    return false;
+  }
+  if (latestSpoken?.text === text || listenQueue.some((queued) => queued.text === text)) {
+    return false;
+  }
+  listenQueue.push({ ...item, id: `q-${Date.now()}-${listenQueue.length}`, text });
+  refreshQueueBar();
+  return true;
+}
+
+function pushListenHistory(item: QueuedListen): void {
+  if (!item.text && !item.tracks?.length) {
+    return;
+  }
+  const last = listenHistory[listenHistory.length - 1];
+  if (last?.text && last.text === item.text) {
+    listenHistory[listenHistory.length - 1] = item;
+    return;
+  }
+  listenHistory.push(item);
+  if (listenHistory.length > 8) {
+    listenHistory.shift();
+  }
+}
+
+function refreshQueueBar(): void {
+  if (!queueBar) {
+    return;
+  }
+  const waiting = listenQueue.length;
+  const previous = listenHistory.length;
+  if (!waiting && !previous && !isPlaybackBusy()) {
+    queueBar.hide();
+    return;
+  }
+  queueBar.text = waiting ? `$(list-ordered) ${waiting}` : '$(list-flat)';
+  queueBar.tooltip = [
+    waiting ? `${waiting} waiting` : 'Nothing waiting',
+    previous ? `${previous} you can go back to` : '',
+    'Click to open the queue',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  queueBar.command = 'vartermCursor.openListenQueue';
+  queueBar.show();
+}
+
+async function maybeAdvanceQueue(): Promise<void> {
+  if (
+    advancingQueue ||
+    isPlaybackBusy() ||
+    anotherWindowOwnsPlayback() ||
+    !listenQueue.length ||
+    !extensionContext
+  ) {
+    refreshQueueBar();
+    return;
+  }
+  advancingQueue = true;
+  const finished = currentListenSnapshot();
+  if (finished) {
+    pushListenHistory({ ...finished, offsetMs: 0, index: 0 });
+  }
+  const next = listenQueue.shift();
+  refreshQueueBar();
+  if (!next) {
+    advancingQueue = false;
+    return;
+  }
+  try {
+    await startQueuedListen(extensionContext, next);
+  } catch (error) {
+    if (!isReadCancelled(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Varterm queue: ${message}`);
+    }
+  } finally {
+    advancingQueue = false;
+    if (!isPlaybackBusy() && listenQueue.length) {
+      void maybeAdvanceQueue();
+    }
+  }
+}
+
+async function startQueuedListen(
+  context: vscode.ExtensionContext,
+  item: QueuedListen
+): Promise<void> {
+  if (item.tracks?.length) {
+    latestSpoken = item.text
+      ? {
+          text: item.text,
+          label: item.label,
+          rate: getReadAloudRate(context),
+          voiceId: currentVoiceId(context),
+        }
+      : latestSpoken;
+    rememberPlayback(item.tracks, item.label);
+    await playTracksInCursor(context, item.tracks, item.index ?? 0, item.offsetMs ?? 0);
+    return;
+  }
+  await readTextAloud(context, item.text, item.label, { replace: true, fromQueue: true });
+}
+
+async function openListenQueue(context: vscode.ExtensionContext): Promise<void> {
+  type QueuePick = vscode.QuickPickItem & {
+    action?: 'queued' | 'history' | 'clear';
+    item?: QueuedListen;
+  };
+  const items: QueuePick[] = [];
+  const current = isPlaybackBusy() ? currentListenSnapshot() : undefined;
+  if (current) {
+    items.push({
+      label: `$(play) Now: ${current.label}`,
+      description: listenPreview(current.text),
+      detail: 'Playing or paused',
+    });
+  }
+  for (const queued of listenQueue) {
+    items.push({
+      label: `$(clock) Up next: ${queued.label}`,
+      description: listenPreview(queued.text),
+      action: 'queued',
+      item: queued,
+    });
+  }
+  for (let i = listenHistory.length - 1; i >= 0; i -= 1) {
+    const previous = listenHistory[i];
+    items.push({
+      label: `$(history) Previous: ${previous.label}`,
+      description: listenPreview(previous.text),
+      action: 'history',
+      item: previous,
+    });
+  }
+  if (listenQueue.length) {
+    items.push({ label: '$(discard) Clear waiting items', action: 'clear' });
+  }
+  if (!items.length) {
+    vscode.window.showInformationMessage('Nothing in the listen queue yet.');
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Varterm queue',
+    placeHolder: 'Play a waiting or previous listen',
+  });
+  if (!picked?.action) {
+    return;
+  }
+  if (picked.action === 'clear') {
+    listenQueue.length = 0;
+    refreshQueueBar();
+    return;
+  }
+  if (!picked.item) {
+    return;
+  }
+  if (picked.action === 'queued') {
+    const index = listenQueue.findIndex((queued) => queued.id === picked.item?.id);
+    if (index >= 0) {
+      listenQueue.splice(index, 1);
+    }
+  }
+  if (isPlaybackBusy()) {
+    const snap = currentListenSnapshot();
+    if (snap) {
+      if (picked.action === 'history') {
+        listenQueue.unshift(snap);
+      } else {
+        pushListenHistory(snap);
+      }
+    }
+  }
+  await startQueuedListen(context, picked.item);
 }
 
 // Advertise to the other Cursor windows whether this one holds the audio, so
@@ -436,7 +959,7 @@ function refreshListenBar(): void {
 function publishPlaybackOwnership(): void {
   if (playbackState === 'playing' || playbackState === 'paused') {
     otherWindow = undefined;
-    claimPlayback(playbackState, latestPlayback?.label || 'audio');
+    claimPlayback(playbackState, latestPlayback?.label || 'audio', playbackClaimSteals);
     return;
   }
   releasePlayback();
@@ -448,12 +971,18 @@ function handlePlaybackLockChange(): void {
   const changed = foreign?.pid !== otherWindow?.pid || foreign?.state !== otherWindow?.state;
   otherWindow = foreign;
 
-  // Last window to start playing wins. Whoever was playing before steps aside
-  // rather than talking over the new owner.
-  if (foreign && (playbackState === 'playing' || playbackState === 'paused')) {
-    logInfo(`Playback moved to another Cursor window (pid ${foreign.pid}); stopping here`);
+  // Only yield when the other window pressed Play (steal). Auto-read claims
+  // must not silence a window that is already speaking.
+  const shouldYield = Boolean(foreign && foreign.steal !== false);
+  if (foreign && shouldYield && (playbackState === 'playing' || playbackState === 'paused')) {
+    const snap = currentListenSnapshot();
+    if (snap) {
+      pushListenHistory(snap);
+    }
+    logInfo(`Playback moved to another Cursor window (pid ${foreign.pid}); saved so you can resume`);
     stopHostPlayback();
     setIdleStatus();
+    refreshQueueBar();
     return;
   }
 
@@ -665,7 +1194,8 @@ function resumeHostPlayback(): boolean {
 async function playTracksInCursor(
   context: vscode.ExtensionContext,
   tracks: AudioTrack[],
-  startIndex = 0
+  startIndex = 0,
+  startOffsetMs = 0
 ): Promise<void> {
   stopHostPlayback();
   expectedTrackCount = tracks.length;
@@ -697,13 +1227,14 @@ async function playTracksInCursor(
   logInfo(`Playing ${files.length} track(s) with /usr/bin/afplay`);
 
   try {
-    await playFilesWithAfplay(files, startIndex);
+    await playFilesWithAfplay(files, startIndex, startOffsetMs);
   } finally {
     if (
       (playbackState === 'playing' || playbackState === 'paused') &&
       playbackFiles === files
     ) {
       setIdleStatus();
+      void maybeAdvanceQueue();
     }
     void pruneAudioCache(context);
   }
@@ -752,6 +1283,7 @@ function startChunk(index: number, generation: number, offsetMs = 0): void {
       return;
     }
     finishPlaylist();
+    void maybeAdvanceQueue();
     return;
   }
   waitingForChunk = undefined;
@@ -803,14 +1335,14 @@ function startChunk(index: number, generation: number, offsetMs = 0): void {
   });
 }
 
-function playFilesWithAfplay(files: string[], startIndex = 0): Promise<void> {
+function playFilesWithAfplay(files: string[], startIndex = 0, startOffsetMs = 0): Promise<void> {
   playGeneration += 1;
   const generation = playGeneration;
   playbackFiles = files;
   return new Promise((resolve, reject) => {
     playResolve = resolve;
     playReject = reject;
-    startChunk(Math.max(0, Math.min(startIndex, files.length - 1)), generation);
+    startChunk(Math.max(0, Math.min(startIndex, files.length - 1)), generation, startOffsetMs);
   });
 }
 
@@ -1670,10 +2202,42 @@ async function readTextAloud(
   context: vscode.ExtensionContext,
   text: string,
   label: string,
-  options?: { replace?: boolean; onStarted?: () => void }
+  options?: { replace?: boolean; onStarted?: () => void; fromQueue?: boolean }
 ): Promise<void> {
   logInfo(`readTextAloud start: label=${label}, chars=${text.length}`);
   const replace = options?.replace !== false;
+  const settings = getSettings();
+  const normalized = stripForSpeech(text);
+  if (!normalized) {
+    throw new Error('No text available to read aloud.');
+  }
+
+  const busy = isPlaybackBusy();
+  const otherOwns = anotherWindowOwnsPlayback();
+  if (label === 'agent reply' && !options?.fromQueue && (busy || otherOwns)) {
+    if (enqueueListen({ text: normalized, label })) {
+      logInfo(
+        otherOwns
+          ? `Another window is playing; queued agent reply (${listenQueue.length} waiting)`
+          : `Queued agent reply (${listenQueue.length} waiting)`
+      );
+    }
+    options?.onStarted?.();
+    return;
+  }
+  if (options?.fromQueue && otherOwns) {
+    enqueueListen({ text: normalized, label });
+    logInfo('Another window still has the speaker; left this item in the queue');
+    return;
+  }
+  if (busy && !options?.fromQueue) {
+    const snap = currentListenSnapshot();
+    if (snap) {
+      pushListenHistory(snap);
+    }
+  }
+  playbackClaimSteals = label !== 'agent reply';
+
   if (isGeneratingAudio && !replace) {
     const choice = await vscode.window.showWarningMessage(
       'Varterm is still generating audio.',
@@ -1685,11 +2249,6 @@ async function readTextAloud(
     }
   }
 
-  const settings = getSettings();
-  const normalized = text.trim();
-  if (!normalized) {
-    throw new Error('No text available to read aloud.');
-  }
   const spokenRate = getReadAloudRate(context);
   const spokenVoiceId = context.globalState.get<string>(VOICE_ID_KEY) || settings.readAloudVoice;
   latestSpoken = { text: normalized, label, rate: spokenRate, voiceId: spokenVoiceId };
@@ -1827,6 +2386,7 @@ async function readTextAloud(
           playbackFiles === files
         ) {
           setIdleStatus();
+          void maybeAdvanceQueue();
         }
         void pruneAudioCache(context);
       }
@@ -2134,9 +2694,9 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  const selected = selectionToRead();
-  if (selected) {
-    await readTextAloud(context, selected, 'selection', { replace: true });
+  const highlighted = await resolveHighlightedText();
+  if (highlighted) {
+    await readTextAloud(context, highlighted.text, highlighted.label, { replace: true });
     return;
   }
 
@@ -2161,7 +2721,10 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  await readClipboardAloud(context);
+  const clipboard = await freshClipboardText();
+  if (clipboard) {
+    await readTextAloud(context, clipboard, 'clipboard', { replace: true });
+  }
 }
 
 async function maybeShowAutoReadTip(context: vscode.ExtensionContext): Promise<void> {
@@ -2214,25 +2777,33 @@ async function readClipboardAloud(context: vscode.ExtensionContext): Promise<voi
 }
 
 async function readSelectionAloud(context: vscode.ExtensionContext): Promise<void> {
-  const selected = selectionToRead();
-  if (selected) {
-    await readTextAloud(context, selected, 'selection', { replace: true });
+  const highlighted = await resolveHighlightedText();
+  if (highlighted) {
+    await readTextAloud(context, highlighted.text, highlighted.label, { replace: true });
     return;
   }
 
   vscode.window.showWarningMessage(
-    'Highlight text in a file, then press Play. Chat and agent panels cannot be read from a highlight — copy, then use the clipboard icon.'
+    'Highlight text in a file or a plan, then press the selection button. Chat highlights still need a copy first.'
   );
 }
 
 async function readSelectionOrClipboard(context: vscode.ExtensionContext): Promise<void> {
-  const selected = selectionToRead();
-  if (selected) {
-    await readTextAloud(context, selected, 'selection', { replace: true });
+  const highlighted = await resolveHighlightedText();
+  if (highlighted) {
+    await readTextAloud(context, highlighted.text, highlighted.label, { replace: true });
     return;
   }
 
-  await readClipboardAloud(context);
+  const clipboard = await freshClipboardText();
+  if (clipboard) {
+    await readTextAloud(context, clipboard, 'clipboard', { replace: true });
+    return;
+  }
+
+  vscode.window.showWarningMessage(
+    'Could not read that highlight. Copy it first (Cmd+C / Ctrl+C), then press the button again. Old clipboard text is ignored. Copy a single space if you want to clear it.'
+  );
 }
 
 function diagnosticSeverityLabel(severity: vscode.DiagnosticSeverity): string | undefined {
@@ -2292,10 +2863,11 @@ export function activate(context: vscode.ExtensionContext): void {
     stop: 88,
     jumpForward: 87,
     replay: 86,
-    meter: 85,
-    autoRead: 84,
-    listen: 83,
-    speed: 82,
+    queue: 85,
+    meter: 84,
+    autoRead: 83,
+    listen: 82,
+    speed: 81,
   };
 
   jumpBackBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.jumpBack);
@@ -2322,6 +2894,10 @@ export function activate(context: vscode.ExtensionContext): void {
   replayBar.command = 'vartermCursor.replayLast';
   context.subscriptions.push(replayBar);
 
+  queueBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.queue);
+  queueBar.command = 'vartermCursor.openListenQueue';
+  context.subscriptions.push(queueBar);
+
   playingIndicator = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.meter);
   playingIndicator.command = 'vartermCursor.statusBarAction';
   context.subscriptions.push(playingIndicator);
@@ -2339,8 +2915,15 @@ export function activate(context: vscode.ExtensionContext): void {
   listenBar.command = 'vartermCursor.readSelectionOrClipboard';
   context.subscriptions.push(listenBar);
   context.subscriptions.push(
-    vscode.window.onDidChangeTextEditorSelection(() => refreshListenBar()),
-    vscode.window.onDidChangeActiveTextEditor(() => refreshListenBar())
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      const text = event.textEditor.document.getText(event.textEditor.selection).trim();
+      if (text) {
+        rememberedSelection = text;
+      }
+      refreshListenBar();
+    }),
+    vscode.window.onDidChangeActiveTextEditor(() => refreshListenBar()),
+    vscode.window.tabGroups.onDidChangeTabs(() => refreshListenBar())
   );
   refreshListenBar();
 
@@ -2427,10 +3010,16 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.openSettings', () => openSettings());
   register('vartermCursor.openKeyboardShortcuts', () => openKeyboardShortcuts());
   register('vartermCursor.clearAudioCache', () => clearAudioCache(context));
+  register('vartermCursor.openListenQueue', () => openListenQueue(context));
   register('vartermCursor.stopPlayback', async () => {
+    const snap = currentListenSnapshot();
+    if (snap) {
+      pushListenHistory(snap);
+    }
     cancelCurrentRead();
     stopHostPlayback();
     setIdleStatus();
+    refreshQueueBar();
   });
   register('vartermCursor.pausePlayback', async () => {
     if (!pauseHostPlayback()) {
@@ -2461,6 +3050,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.toggleAutoRead', () => toggleAutoRead(context));
   register('vartermCursor.saveLastAudio', () => saveLatestAudio());
 
+  void snapshotClipboard();
   void pruneAudioCache(context);
   void maybeShowShortcutsTip(context);
   void maybeShowAutoReadTip(context);

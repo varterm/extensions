@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.55 - 2026-09-10
+
+### Fixed
+- **Auto-read no longer steals another window’s speaker.** A finished reply in a window with Auto-read off (or on) waits in that window’s queue if some other Cursor window is already playing. Only pressing Play takes the speaker. If you do take it, the other window saves the listen so you can resume from the queue.
+
+## 0.1.54 - 2026-09-10
+
+### Added
+- **Listen queue in the status bar.** A new agent reply no longer cuts off what you are hearing — it waits. A list icon shows how many are waiting. Click it to play a waiting item or go back to the previous listen (resume from where you left it). When the current listen finishes, the next one starts. Stop keeps the queue so you can pick up again.
+
+## 0.1.53 - 2026-09-10
+
+### Fixed
+- **Markdown is stripped before speech.** Plan files were read raw, so the voice said “hashtag” and “backslash.” Headings, emphasis, lists, tables, code fences, and markdown escapes are removed first.
+
+## 0.1.52 - 2026-09-10
+
+### Added
+- **Read a Cursor plan from the file behind the view.** Plan preview often cannot copy. The selection button now opens the backing `.md` / `.plan.md` (tab URI, `~/.cursor/plans`, or `.cursor/plans` in the workspace) and reads that.
+
+## 0.1.51 - 2026-09-10
+
+### Fixed
+- **Selection button no longer plays stale clipboard text.** A leftover copy was winning when a plan highlight could not be read. The button now tries to recapture the highlight, and ignores clipboard contents that have not changed.
+
+## 0.1.50 - 2026-09-10
+
+### Fixed
+- **Play selected works in a Cursor build plan.** Plans are not a normal editor, so a highlight was invisible and only a copy reached the clipboard. The selection button now copies from the plan view (then restores your clipboard), or reads the plan file if that highlight cannot be seen.
+
 ## 0.1.49 - 2026-09-10
 
 ### Fixed

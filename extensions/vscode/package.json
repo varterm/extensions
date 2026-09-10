@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.49",
+  "version": "0.1.55",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -99,6 +99,10 @@
       {
         "command": "vartermCursor.replayLast",
         "title": "Varterm: Replay Last Audio"
+      },
+      {
+        "command": "vartermCursor.openListenQueue",
+        "title": "Varterm: Listen Queue"
       },
       {
         "command": "vartermCursor.jumpBack",

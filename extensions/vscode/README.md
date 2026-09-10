@@ -19,7 +19,7 @@ Select text **in a file** and press **Play**, or the selection / clipboard icon 
 - Right-click a selection → **Read Selection Aloud**.
 - The status bar icon turns into a selection mark while text is highlighted, and a clipboard when it will read what you copied.
 - Click the **speed** chip (`1×`) at the end of that row for a menu: 0.75×–2×, voice, and settings. In the voice list, click the speaker to preview; Enter uses that voice.
-- **Chat and agent panels cannot be highlighted into speech.** Those views are not editor text. Copy the reply, then click the clipboard icon — or turn on Auto-read so the finished reply plays itself.
+- **Build plans.** Cursor’s plan view is not a text editor and often cannot copy. Press the selection button to hear the markdown file behind the plan (`~/.cursor/plans` or `.cursor/plans`). To hear a highlight only, open the plan with **Open With → Text Editor**. Chat and agent panels still need a copy, or Auto-read.
 
 ## Agent Auto-read
 
@@ -29,7 +29,7 @@ It changes the loop: send the prompt, go back to your file, and let the answer c
 
 - One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other. Other windows show the mark dimmed while another one is talking, and pressing Play there moves playback over instead of starting a second copy.
 - Playback stays in the editor. On macOS it runs through `afplay` — no Music.app, no extra tab.
-- Transport is icon-only while playing: jump back, pause, stop, jump forward, replay.
+- Transport is icon-only while playing: jump back, pause, stop, jump forward, replay. A queue icon appears when something is waiting or you can go back. Auto-read joins the queue instead of cutting off the current listen.
 - The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
 - Clipboard and pasted text interrupt whatever is playing. The next finished agent reply takes the speaker back — you do not need to toggle Auto-read.

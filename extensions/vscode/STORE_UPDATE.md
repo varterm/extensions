@@ -1,4 +1,4 @@
-# Submit Varterm TTS 0.1.49
+# Submit Varterm TTS 0.1.55
 
 Both stores take their **short description** from `package.json` and their **long description** from `README.md` when you publish this VSIX.
 
@@ -13,7 +13,7 @@ Open VSX can run without a Marketplace token:
 npm run publish:ovsx
 ```
 
-Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.49.vsix`
+Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.55.vsix`
 
 ---
 
@@ -28,7 +28,7 @@ Highlight text to hear it — no copy. Auto-read speaks agent replies. Change sp
 ## What’s new
 
 ```
-Auto-read is per window — the status bar no longer flips every Cursor window. Play keeps the last file highlight. Chat and agent panels still need copy or Auto-read.
+Listen queue in the status bar — a new reply waits instead of cutting you off. Auto-read no longer steals another window’s speaker; only Play does. Plans read from the file behind the view. Markdown is stripped before speech.
 ```
 
 ---
@@ -37,4 +37,4 @@ Auto-read is per window — the status bar no longer flips every Cursor window. 
 
 1. https://marketplace.visualstudio.com/manage/publishers/varterm
 2. **varterm.varterm-cursor** → **… → Update**
-3. Upload `varterm-cursor-0.1.49.vsix`
+3. Upload `varterm-cursor-0.1.55.vsix`

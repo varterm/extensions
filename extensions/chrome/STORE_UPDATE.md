@@ -1,4 +1,4 @@
-# Chrome Web Store resubmit — 1.4.2
+# Chrome Web Store resubmit — 1.4.3
 
 1.4.0 was rejected (Yellow Argon): the public description listed
 third-party chat product names as keywords. This draft removes those
@@ -11,7 +11,7 @@ Package: `extensions/extensions/chrome/varterm-tts-chrome.zip`
 
 1. Open https://chrome.google.com/webstore/devconsole
 2. Open the existing **Varterm TTS - Text to Speech** item
-3. Upload `varterm-tts-chrome.zip` (must show version **1.4.2**)
+3. Upload `varterm-tts-chrome.zip` (must show version **1.4.3**)
 4. Replace the **Short description** and **Description** from
    `STORE_LISTING.md` — paste the Detailed Description block only
 5. Replace **What's new** from that file (no product-name list)

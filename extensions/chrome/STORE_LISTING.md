@@ -2,7 +2,7 @@
 
 Use this content in the Chrome Web Store listing for `Varterm TTS - Text to Speech`.
 
-Version this package: **1.4.2**
+Version this package: **1.4.3**
 
 **Do not paste brand catalogs into the public description.** Draft 1.4.0
 was rejected (Yellow Argon / Spam and Placement) for listing
@@ -197,7 +197,7 @@ Paste this into the notes for the reviewer only. Do not put it in Description.
 > listing describes this as “AI chat replies” without naming the products,
 > because the feature is the same on each site.
 
-## What's new (1.4.2)
+## What's new (1.4.3)
 
 Use this in the Chrome Web Store "What's new" field if it is offered. Do not
 list product names here either.
@@ -209,7 +209,7 @@ list product names here either.
 
 ## Final Pre-Submit Checklist
 
-- Zip built with `./package.sh` — `varterm-tts-chrome.zip` is version **1.4.2**
+- Zip built with `./package.sh` — `varterm-tts-chrome.zip` is version **1.4.3**
 - Confirm `sites.js` and `chats.js` are inside the zip
 - Public Description pasted from the Detailed Description section only
 - Short description matches the manifest (no product-name lists)

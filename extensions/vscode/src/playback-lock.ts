@@ -17,6 +17,8 @@ export type PlaybackOwner = {
   state: 'playing' | 'paused';
   label: string;
   updatedAt: number;
+  /** When false, other windows should not yield. Auto-read must not steal. */
+  steal?: boolean;
 };
 
 const FILE_NAME = 'varterm-playing.json';
@@ -48,8 +50,12 @@ export function readPlaybackOwner(): PlaybackOwner | undefined {
   }
 }
 
-export function claimPlayback(state: 'playing' | 'paused', label: string): void {
-  const owner: PlaybackOwner = { pid: process.pid, state, label, updatedAt: Date.now() };
+export function claimPlayback(
+  state: 'playing' | 'paused',
+  label: string,
+  steal = true
+): void {
+  const owner: PlaybackOwner = { pid: process.pid, state, label, updatedAt: Date.now(), steal };
   try {
     fs.mkdirSync(path.dirname(playbackLockPath()), { recursive: true });
     fs.writeFileSync(playbackLockPath(), `${JSON.stringify(owner)}\n`, 'utf8');
