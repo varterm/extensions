@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.62 - 2026-09-11
+
+### Removed
+- Store build no longer includes the Sentry test command.
+
+## 0.1.59 - 2026-09-11
+
+### Added
+- Editor extension sends failed-read reports to Sentry (no spoken text). Off via `vartermCursor.telemetry` or editor telemetry.
+
+## 0.1.58 - 2026-09-10
+
+### Fixed
+- Auto-read Off is global: the hook will not write a new listen, and clicking the chip that already says Off no longer starts playback.
+
+## 0.1.57 - 2026-09-10
+
+### Fixed
+- Auto-read Off is stored in `~/.cursor/varterm-autoread.json` so an update or restart cannot turn it back on from leftover settings.
+
+## 0.1.56 - 2026-09-10
+
+### Fixed
+- Auto-read off stops this window’s current and queued agent listens. Turning it on reads the last finished reply.
+
 ## 0.1.55 - 2026-09-10
 
 ### Fixed

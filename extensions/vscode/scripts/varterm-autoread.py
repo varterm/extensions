@@ -47,6 +47,15 @@ if isinstance(data, dict):
         workspace = data["workspace"].strip()
 out_dir = Path.home() / ".cursor"
 out_dir.mkdir(parents=True, exist_ok=True)
+
+auto_read_on = True
+try:
+    store = json.loads((out_dir / "varterm-autoread.json").read_text(encoding="utf-8"))
+    if store.get("enabled") is False:
+        auto_read_on = False
+except Exception:
+    auto_read_on = True
+
 debug = {
     "ts": time.time(),
     "chars": len(text),
@@ -54,9 +63,10 @@ debug = {
     "cwd": cwd,
     "workspace": workspace,
     "text_preview": text[:240],
+    "auto_read": auto_read_on,
 }
 (out_dir / "varterm-last-hook.json").write_text(json.dumps(debug, indent=2), encoding="utf-8")
-if text:
+if text and auto_read_on:
     (out_dir / "varterm-last-agent.json").write_text(
         json.dumps({"text": text, "ts": time.time(), "cwd": cwd, "workspace": workspace}),
         encoding="utf-8",

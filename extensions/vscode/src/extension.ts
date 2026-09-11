@@ -16,15 +16,16 @@ import {
 } from './playback-lock';
 import { PLAYER_VIEW_ID, VartermPlayerViewProvider } from './player-view';
 import {
-  AUTO_READ_KEY,
   getAutoReadEnabled,
   installVartermAgentHook,
+  isAutoReadAllowed,
   loadAutoReadEnabled,
   persistAutoReadEnabled,
   readLastAgentText,
   stripForSpeech,
   watchAgentDropFile,
 } from './auto-read';
+import { captureException, flushTelemetry, initTelemetry } from './telemetry';
 
 const SECRET_TOKEN_KEY = 'vartermCursor.apiToken';
 const SECRET_ELEVENLABS_KEY = 'vartermCursor.elevenLabsApiKey';
@@ -89,6 +90,7 @@ type ExtensionSettings = {
   maxCachedAudioAgeHours: number;
   showPlayingIndicator: boolean;
   resumeRewindMs: number;
+  telemetry: boolean;
 };
 
 type AudioTrack = { title: string; base64: string };
@@ -852,6 +854,7 @@ async function maybeAdvanceQueue(): Promise<void> {
     if (!isReadCancelled(error)) {
       const message = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(`Varterm queue: ${message}`);
+      captureException(error, { area: 'queue' });
     }
   } finally {
     advancingQueue = false;
@@ -1023,10 +1026,19 @@ async function tryUpdateUserSetting(key: string, value: unknown): Promise<void> 
   }
 }
 
+function stopAutoReadInThisWindow(): void {
+  listenQueue.length = 0;
+  cancelCurrentRead();
+  stopHostPlayback();
+  setIdleStatus();
+  refreshQueueBar();
+  logInfo('Auto-read off: stopped playback in this window');
+}
+
 async function setAutoReadEnabled(
   context: vscode.ExtensionContext,
   enabled: boolean,
-  _options?: { persistSettings?: boolean }
+  _options?: { persistSettings?: boolean; playLastReply?: boolean }
 ): Promise<void> {
   await persistAutoReadEnabled(context, enabled);
   setAutoReadStatus(enabled);
@@ -1034,28 +1046,37 @@ async function setAutoReadEnabled(
   autoReadWatcher?.dispose();
   autoReadWatcher = undefined;
 
-  if (!enabled) {
-    logInfo('Auto-read off');
-    return;
-  }
-
   try {
     await installVartermAgentHook(context.extensionPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`Hook install skipped: ${message}`);
   }
+
+  if (!enabled) {
+    stopAutoReadInThisWindow();
+    logInfo('Auto-read off');
+    return;
+  }
+
   autoReadWatcher = watchAgentDropFile((text, markHeard) => {
-    return readTextAloud(context, text, 'agent reply', { replace: true, onStarted: markHeard }).catch(
-      (error) => {
-        if (isReadCancelled(error)) {
-          throw error;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
+    if (!isAutoReadAllowed()) {
+      markHeard();
+      return;
+    }
+    return readTextAloud(context, text, 'agent reply', {
+      replace: true,
+      onStarted: markHeard,
+      autoRead: true,
+    }).catch((error) => {
+      if (isReadCancelled(error)) {
         throw error;
       }
-    );
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
+      captureException(error, { area: 'auto-read', label: 'agent reply' });
+      throw error;
+    });
   }, logInfo);
   logInfo('Auto-read on');
 }
@@ -1064,7 +1085,9 @@ async function toggleAutoRead(context: vscode.ExtensionContext): Promise<void> {
   const next = !getAutoReadEnabled(context);
   await setAutoReadEnabled(context, next);
   vscode.window.showInformationMessage(
-    next ? 'Auto-read on in this window. Finished replies will play here.' : 'Auto-read off in this window.'
+    next
+      ? 'Auto-read on. The next finished reply will play here.'
+      : 'Auto-read off. Finished replies will not play.'
   );
 }
 
@@ -1358,6 +1381,7 @@ async function jumpPlayback(delta: number): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(`Varterm: ${message}`);
+      captureException(error, { area: 'jump' });
     }
     return;
   }
@@ -1437,6 +1461,7 @@ function getSettings(): ExtensionSettings {
     maxCachedAudioAgeHours: config.get<number>('maxCachedAudioAgeHours', 24),
     showPlayingIndicator: config.get<boolean>('showPlayingIndicator', true),
     resumeRewindMs: config.get<number>('resumeRewindMs', 600),
+    telemetry: config.get<boolean>('telemetry', true),
   };
 }
 
@@ -2202,10 +2227,22 @@ async function readTextAloud(
   context: vscode.ExtensionContext,
   text: string,
   label: string,
-  options?: { replace?: boolean; onStarted?: () => void; fromQueue?: boolean }
+  options?: {
+    replace?: boolean;
+    onStarted?: () => void;
+    fromQueue?: boolean;
+    steal?: boolean;
+    autoRead?: boolean;
+  }
 ): Promise<void> {
   logInfo(`readTextAloud start: label=${label}, chars=${text.length}`);
+  if (options?.autoRead && !isAutoReadAllowed()) {
+    logInfo('readTextAloud skipped: Auto-read is off');
+    options.onStarted?.();
+    return;
+  }
   const replace = options?.replace !== false;
+  const steal = options?.steal === true;
   const settings = getSettings();
   const normalized = stripForSpeech(text);
   if (!normalized) {
@@ -2214,7 +2251,7 @@ async function readTextAloud(
 
   const busy = isPlaybackBusy();
   const otherOwns = anotherWindowOwnsPlayback();
-  if (label === 'agent reply' && !options?.fromQueue && (busy || otherOwns)) {
+  if (label === 'agent reply' && !options?.fromQueue && !steal && (busy || otherOwns)) {
     if (enqueueListen({ text: normalized, label })) {
       logInfo(
         otherOwns
@@ -2236,7 +2273,7 @@ async function readTextAloud(
       pushListenHistory(snap);
     }
   }
-  playbackClaimSteals = label !== 'agent reply';
+  playbackClaimSteals = steal || label !== 'agent reply';
 
   if (isGeneratingAudio && !replace) {
     const choice = await vscode.window.showWarningMessage(
@@ -2405,6 +2442,7 @@ async function readTextAloud(
     }
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`readTextAloud error: ${message}`);
+    captureException(error, { area: 'read', label });
     setPlaybackStatus('$(error) Varterm failed — click to retry', 'idle');
     getOutputChannel().show(true);
     playerProvider?.post({ type: 'error', label, message });
@@ -2614,6 +2652,7 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
         }
         const detail = error instanceof Error ? error.message : 'Unexpected error';
         vscode.window.showErrorMessage(`Varterm: ${detail}`);
+        captureException(error, { area: 'player' });
       }
     })();
   }, 0);
@@ -2731,7 +2770,7 @@ async function maybeShowAutoReadTip(context: vscode.ExtensionContext): Promise<v
   if (context.globalState.get<boolean>(AUTO_READ_TIP_KEY)) {
     return;
   }
-  if (getAutoReadEnabled(context) || getSettings().autoReadAgentOutput) {
+  if (getAutoReadEnabled(context)) {
     await context.globalState.update(AUTO_READ_TIP_KEY, true);
     return;
   }
@@ -2850,6 +2889,7 @@ async function readErrorsAloud(context: vscode.ExtensionContext): Promise<void> 
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
+  initTelemetry(context, logInfo);
 
   // Left-aligned status bar items render highest priority first, so these
   // descend in the order they should appear. Keeping them contiguous matters:
@@ -2949,17 +2989,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!event.affectsConfiguration('vartermCursor.autoReadAgentOutput')) {
         return;
       }
-      // Status bar is per-window. Do not copy a settings.json write from
-      // another window. Only honor the setting before this workspace has a
-      // local toggle stored.
-      if (context.workspaceState.get(AUTO_READ_KEY) !== undefined) {
-        return;
-      }
-      const enabled = getSettings().autoReadAgentOutput;
-      if (enabled === getAutoReadEnabled(context) && Boolean(autoReadWatcher) === enabled) {
-        return;
-      }
-      void setAutoReadEnabled(context, enabled);
+      // Status bar + ~/.cursor/varterm-autoread.json own on/off. A leftover
+      // settings.json true must not turn this window back on after an update.
     })
   );
 
@@ -2981,6 +3012,7 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           const message = error instanceof Error ? error.message : 'Unexpected error';
           vscode.window.showErrorMessage(`Varterm: ${message}`);
+          captureException(error, { area: 'command' });
         }
       })
     );
@@ -3065,4 +3097,5 @@ export function deactivate(): void {
   stopIndicatorAnimation();
   stopHostPlayback();
   releasePlayback();
+  void flushTelemetry();
 }

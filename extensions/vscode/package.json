@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.55",
+  "version": "0.1.62",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -251,7 +251,7 @@
         "vartermCursor.autoReadAgentOutput": {
           "type": "boolean",
           "default": false,
-          "description": "Default Auto-read for a workspace that has not used the status bar toggle yet. The status bar is per window and does not change other windows."
+          "description": "Last Auto-read choice, kept in sync with the status bar. Restart and updates read ~/.cursor/varterm-autoread.json, not this setting alone."
         },
         "vartermCursor.readAloudVoice": {
           "type": "string",
@@ -304,6 +304,11 @@
           "minimum": 0,
           "maximum": 5000,
           "description": "How far to rewind when resuming after a pause, in milliseconds. A small overlap makes sure no words are lost at the join."
+        },
+        "vartermCursor.telemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send crash and failed-read reports to Sentry so we can fix issues. Never includes the text you listen to. Off if Cursor/VS Code telemetry is off."
         }
       }
     },

@@ -5,22 +5,89 @@ import * as vscode from 'vscode';
 
 export const AUTO_READ_KEY = 'vartermCursor.autoReadAgentOutput';
 const RELATIVE_HOOK_COMMAND = './hooks/varterm-autoread.py';
+const STORE_NAME = 'varterm-autoread.json';
 
 type AgentDrop = { text?: string; ts?: number; cwd?: string; workspace?: string };
+type AutoReadStore = { enabled?: boolean; workspaces?: Record<string, boolean> };
 
-/** This extension host / window only. Do not read settings or globalState here. */
+/** This extension host / window only. Do not read settings here. */
 let thisWindowEnabled = false;
 
 export function getAutoReadEnabled(_context?: vscode.ExtensionContext): boolean {
   return thisWindowEnabled;
 }
 
+function autoReadStorePath(): string {
+  return path.join(os.homedir(), '.cursor', STORE_NAME);
+}
+
+function workspacePersistKey(): string {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) {
+    return '__empty__';
+  }
+  return folders
+    .map((folder) => folder.uri.fsPath)
+    .sort()
+    .join('\n');
+}
+
+function readAutoReadStore(): AutoReadStore {
+  try {
+    return JSON.parse(fs.readFileSync(autoReadStorePath(), 'utf8')) as AutoReadStore;
+  } catch {
+    return {};
+  }
+}
+
+function writeAutoReadStore(store: AutoReadStore): void {
+  fs.mkdirSync(path.dirname(autoReadStorePath()), { recursive: true });
+  fs.writeFileSync(autoReadStorePath(), `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+}
+
+function readDurableAutoRead(workspaceKey: string): boolean | undefined {
+  const store = readAutoReadStore();
+  // A global Off wins over a leftover per-workspace On from another folder.
+  if (store.enabled === false) {
+    return false;
+  }
+  const byWorkspace = store.workspaces?.[workspaceKey];
+  if (typeof byWorkspace === 'boolean') {
+    return byWorkspace;
+  }
+  if (typeof store.enabled === 'boolean') {
+    return store.enabled;
+  }
+  return undefined;
+}
+
+/** Memory and the on-disk file. Other windows / a stale watcher must both be off. */
+export function isAutoReadAllowed(): boolean {
+  if (!thisWindowEnabled) {
+    return false;
+  }
+  return readAutoReadStore().enabled !== false;
+}
+
 export function loadAutoReadEnabled(
   context: vscode.ExtensionContext,
-  settingsDefault: boolean
+  _settingsDefault?: boolean
 ): boolean {
-  const stored = context.workspaceState.get<boolean | undefined>(AUTO_READ_KEY);
-  thisWindowEnabled = typeof stored === 'boolean' ? stored : settingsDefault;
+  const workspaceStored = context.workspaceState.get<boolean | undefined>(AUTO_READ_KEY);
+  const globalStored = context.globalState.get<boolean | undefined>(AUTO_READ_KEY);
+  const durable = readDurableAutoRead(workspacePersistKey());
+  // File first: workspaceState is what a VSIX update can drop. Never fall back
+  // to vartermCursor.autoReadAgentOutput — that leftover true turned Off back on.
+  if (typeof durable === 'boolean') {
+    thisWindowEnabled = durable;
+  } else if (typeof globalStored === 'boolean') {
+    thisWindowEnabled = globalStored;
+  } else if (typeof workspaceStored === 'boolean') {
+    thisWindowEnabled = workspaceStored;
+  } else {
+    thisWindowEnabled = false;
+    void persistAutoReadEnabled(context, false);
+  }
   return thisWindowEnabled;
 }
 
@@ -30,6 +97,28 @@ export async function persistAutoReadEnabled(
 ): Promise<void> {
   thisWindowEnabled = enabled;
   await context.workspaceState.update(AUTO_READ_KEY, enabled);
+  await context.globalState.update(AUTO_READ_KEY, enabled);
+  const key = workspacePersistKey();
+  const store = readAutoReadStore();
+  store.enabled = enabled;
+  if (enabled) {
+    store.workspaces = { ...store.workspaces, [key]: true };
+  } else {
+    // Off is global. Do not leave another folder's key at true.
+    store.workspaces = {};
+  }
+  try {
+    writeAutoReadStore(store);
+  } catch {
+    // Memory and VS Code state still hold this window.
+  }
+  try {
+    await vscode.workspace
+      .getConfiguration('vartermCursor')
+      .update('autoReadAgentOutput', enabled, vscode.ConfigurationTarget.Global);
+  } catch {
+    // Settings UI can stay stale; the file is what restart reads.
+  }
 }
 
 export function agentDropPath(): string {
@@ -66,13 +155,30 @@ export async function installVartermAgentHook(extensionPath: string): Promise<vo
   await fs.promises.writeFile(hooksJsonPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
 }
 
-export function readLastAgentText(): string {
+export function readLastAgentDrop(): { text: string; ts: number } | undefined {
   try {
     const parsed = JSON.parse(fs.readFileSync(agentDropPath(), 'utf8')) as AgentDrop;
-    return stripForSpeech(parsed.text || '');
+    const text = stripForSpeech(parsed.text || '');
+    if (!text) {
+      return undefined;
+    }
+    return { text, ts: Number(parsed.ts) || 0 };
   } catch {
-    return '';
+    return undefined;
   }
+}
+
+export function readLastAgentText(): string {
+  return readLastAgentDrop()?.text || '';
+}
+
+/** Hook timestamps are Unix seconds; tolerate millisecond values from older files. */
+export function agentDropAgeMs(ts: number): number {
+  if (!ts) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const writtenAt = ts > 1e12 ? ts : ts * 1000;
+  return Date.now() - writtenAt;
 }
 
 export function stripForSpeech(text: string): string {
@@ -215,6 +321,11 @@ export function watchAgentDropFile(
         const ts = Number(parsed.ts) || 0;
         const text = stripForSpeech(parsed.text || '');
         if (!text || ts <= lastTs || ts === inFlightTs || text.length < 8) {
+          return;
+        }
+        if (!isAutoReadAllowed()) {
+          log('Auto-read skipped: off');
+          markHeardTs(ts);
           return;
         }
         inFlightTs = ts;

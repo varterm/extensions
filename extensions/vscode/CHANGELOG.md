@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.62 - 2026-09-11
+
+### Removed
+- **Varterm: Send Test Error to Sentry.** Local wiring is confirmed. Failed reads still report to Sentry.
+
+## 0.1.61 - 2026-09-11
+
+### Fixed
+- Sentry reports use Node HTTPS so the editor host can reach ingest (fetch was silent from Cursor).
+
+## 0.1.60 - 2026-09-11
+
+### Added
+- **Varterm: Send Test Error to Sentry** so you can confirm Issues before a store submit. The output channel also logs whether Sentry is on.
+
+## 0.1.59 - 2026-09-11
+
+### Added
+- **Error reports to Sentry** when a read or command fails. Spoken text is not sent. Turn off with `vartermCursor.telemetry` or the editor telemetry setting.
+
+## 0.1.58 - 2026-09-10
+
+### Fixed
+- **Off means Off.** Clicking the chip while it already says Off no longer turns Auto-read on and reads the last reply. Off stops playback, writes a global off file, and the agent hook will not start a new listen.
+
+## 0.1.57 - 2026-09-10
+
+### Fixed
+- **Auto-read Off survives update and restart.** Off is written to `~/.cursor/varterm-autoread.json`. A leftover Settings value of true no longer turns it back on after a VSIX install or reload.
+
+## 0.1.56 - 2026-09-10
+
+### Fixed
+- **Turning Auto-read off stops this window.** The current agent reply and any queued replies stop. Other windows keep their own on/off. Clicking Auto-read back on reads the last finished reply.
+
 ## 0.1.55 - 2026-09-10
 
 ### Fixed

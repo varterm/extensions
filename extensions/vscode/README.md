@@ -74,12 +74,13 @@ Change or remove them with **`Varterm: Customize Keyboard Shortcuts`**.
 Everything lives under `vartermCursor.*`:
 
 - `readAloudVoice`, `readAloudRate`, `readAloudProvider` — voice, speed, Edge or Premium. Speed is also the `1×` chip on the status bar.
-- `autoReadAgentOutput` — default for a workspace before you use the status bar. The Auto-read chip is per window.
+- `autoReadAgentOutput` — mirrored from the status bar. Off/On after restart comes from `~/.cursor/varterm-autoread.json`, so an update cannot turn it back on.
 - `showPlayingIndicator` — the animated meter in the status bar (default on).
 - `resumeRewindMs` — how far resume rewinds after a pause (default 600ms) so no words are lost at the join.
 - `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
 - `requestTimeoutMs`, `requestRetries` — for very long passages.
 - `elevenLabsApiKey` — plain-text fallback; the secure command is preferred.
+- `telemetry` — send crash and failed-read reports to Sentry (default on). Never includes the text you listen to. Also off when Cursor/VS Code telemetry is off.
 
 ## Build it yourself
 
