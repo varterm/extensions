@@ -15,6 +15,7 @@ const SKIP_MESSAGES = [
   'No audio to replay yet.',
   'No agent reply captured yet',
   'No text available to read aloud',
+  'Background playback currently uses macOS afplay',
 ];
 
 type SentryDsn = {

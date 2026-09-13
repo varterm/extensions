@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.63 - 2026-09-12
+
+### Fixed
+- Windows (and Linux via ffplay) can play reads in the background. The Sentry error `Background playback currently uses macOS afplay` was a Windows user hitting that gap.
+
 ## 0.1.62 - 2026-09-11
 
 ### Removed

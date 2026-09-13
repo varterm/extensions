@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.63 - 2026-09-12
+
+### Fixed
+- **Windows can hear playback.** Selection, Auto-read, and voice preview used macOS `afplay` and threw `Background playback currently uses macOS afplay.` Windows now plays the MP3 in the background. Linux uses `ffplay` when it is on PATH.
+
 ## 0.1.62 - 2026-09-11
 
 ### Removed

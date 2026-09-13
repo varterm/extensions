@@ -1234,10 +1234,6 @@ async function playTracksInCursor(
     files.push(uri.fsPath);
   }
 
-  if (process.platform !== 'darwin') {
-    throw new Error('Background playback currently uses macOS afplay.');
-  }
-
   for (const filePath of files) {
     const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
     logInfo(`Audio file ${filePath} size=${stat.size}`);
@@ -1247,7 +1243,7 @@ async function playTracksInCursor(
   }
 
   setPlaybackStatus('$(debug-pause)', 'playing');
-  logInfo(`Playing ${files.length} track(s) with /usr/bin/afplay`);
+  logInfo(`Playing ${files.length} track(s) with ${hostPlayerName()}`);
 
   try {
     await playFilesWithAfplay(files, startIndex, startOffsetMs);
@@ -1294,6 +1290,48 @@ function trimmedResumeFile(filePath: string, offsetMs: number): { path: string; 
   }
 }
 
+function hostPlayerName(): string {
+  if (process.platform === 'darwin') {
+    return 'afplay';
+  }
+  if (process.platform === 'win32') {
+    return 'Windows MediaPlayer';
+  }
+  return 'ffplay';
+}
+
+function spawnHostPlayer(filePath: string): ChildProcess {
+  if (process.platform === 'darwin') {
+    return spawn('/usr/bin/afplay', [filePath], {
+      stdio: 'ignore',
+      env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    });
+  }
+  if (process.platform === 'win32') {
+    const script = path.join(__dirname, '..', 'scripts', 'play-mp3.ps1');
+    return spawn(
+      'powershell.exe',
+      [
+        '-STA',
+        '-NoProfile',
+        '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        script,
+        '-Path',
+        filePath,
+      ],
+      { stdio: 'ignore', windowsHide: true }
+    );
+  }
+  return spawn('ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath], {
+    stdio: 'ignore',
+  });
+}
+
 function startChunk(index: number, generation: number, offsetMs = 0): void {
   if (generation !== playGeneration) {
     return;
@@ -1322,10 +1360,7 @@ function startChunk(index: number, generation: number, offsetMs = 0): void {
   logInfo(
     `Start chunk ${playbackIndex + 1}/${expectedTrackCount || playbackFiles.length}${from} ${resume.path}`
   );
-  const child = spawn('/usr/bin/afplay', [resume.path], {
-    stdio: 'ignore',
-    env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
-  });
+  const child = spawnHostPlayer(resume.path);
   livePlayers.add(child);
   playbackProcess = child;
 
@@ -1349,7 +1384,9 @@ function startChunk(index: number, generation: number, offsetMs = 0): void {
     }
     playbackProcess = undefined;
     if (code && code !== 0) {
-      playReject?.(new Error(`afplay exited with code ${code}${signal ? ` (${signal})` : ''}`));
+      playReject?.(
+        new Error(`${hostPlayerName()} exited with code ${code}${signal ? ` (${signal})` : ''}`)
+      );
       playResolve = undefined;
       playReject = undefined;
       return;
@@ -1695,17 +1732,14 @@ function previewCacheKey(voice: VoiceOption, rate: number): string {
 }
 
 function startPreviewAfplay(filePath: string, generation: number): void {
-  if (generation !== previewGeneration || process.platform !== 'darwin') {
+  if (generation !== previewGeneration) {
     return;
   }
   if (previewProcess) {
     forceKillChild(previewProcess);
     previewProcess = undefined;
   }
-  const child = spawn('/usr/bin/afplay', [filePath], {
-    stdio: 'ignore',
-    env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
-  });
+  const child = spawnHostPlayer(filePath);
   previewProcess = child;
   child.on('close', () => {
     if (previewProcess === child) {
@@ -2386,9 +2420,6 @@ async function readTextAloud(
       }
 
       if (!playDone) {
-        if (process.platform !== 'darwin') {
-          throw new Error('Background playback currently uses macOS afplay.');
-        }
         setPlaybackStatus('$(debug-pause)', 'playing');
         logInfo(`Playing first of ${chunks.length} track(s) while generating the rest`);
         playDone = playFilesWithAfplay(files, 0);

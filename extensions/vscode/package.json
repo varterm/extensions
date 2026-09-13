@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.62",
+  "version": "0.1.63",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {

@@ -28,7 +28,7 @@ Click **Auto-read** in the status bar. When an agent reply **finishes**, it play
 It changes the loop: send the prompt, go back to your file, and let the answer come to you. No parking on the chat panel watching tokens stream, no scrolling back up to find the one line that mattered — jump back and hear it again.
 
 - One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other. Other windows show the mark dimmed while another one is talking, and pressing Play there moves playback over instead of starting a second copy.
-- Playback stays in the editor. On macOS it runs through `afplay` — no Music.app, no extra tab.
+- Playback stays in the editor. macOS uses `afplay`, Windows uses a hidden player, Linux uses `ffplay` if installed. No Music.app, no extra tab.
 - Transport is icon-only while playing: jump back, pause, stop, jump forward, replay. A queue icon appears when something is waiting or you can go back. Auto-read joins the queue instead of cutting off the current listen.
 - The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
