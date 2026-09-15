@@ -28,12 +28,20 @@ export async function synthesize(text, voice, rate) {
 
 // Whichever of these exists. Each one plays a file and exits when it is done,
 // which is what makes the queue below sequential.
+//
+// All of them decode MP3, which is what the endpoint returns. aplay and paplay
+// used to be here and should not have been: aplay handles WAV and raw only, and
+// paplay only learned MP3 in libsndfile 1.1.0, so on an older machine with
+// neither ffplay nor mpv they were picked and then failed.
 const PLAYERS = [
   { cmd: 'afplay', args: (file) => [file] },
   { cmd: 'ffplay', args: (file) => ['-nodisp', '-autoexit', '-loglevel', 'quiet', file] },
   { cmd: 'mpv', args: (file) => ['--no-video', '--really-quiet', file] },
-  { cmd: 'paplay', args: (file) => [file] },
-  { cmd: 'aplay', args: (file) => ['-q', file] },
+  { cmd: 'mpg123', args: (file) => ['-q', file] },
+  { cmd: 'mpg321', args: (file) => ['-q', file] },
+  { cmd: 'cvlc', args: (file) => ['--intf', 'dummy', '--play-and-exit', '--quiet', file] },
+  { cmd: 'gst-play-1.0', args: (file) => ['--quiet', file] },
+  { cmd: 'play', args: (file) => ['-q', file] },
 ];
 
 function onPath(cmd) {

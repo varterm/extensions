@@ -18,6 +18,16 @@ const SKIP_MESSAGES = [
   'Background playback currently uses macOS afplay',
 ];
 
+// Set at the point of failure so a report explains itself. `voice` and `script`
+// are what a read was attempted with, which is the context that turns a vague
+// "no audio generated" into an obvious voice and language mismatch.
+export type TelemetryContext = {
+  area?: string;
+  label?: string;
+  voice?: string;
+  script?: string;
+};
+
 type SentryDsn = {
   key: string;
   host: string;
@@ -88,7 +98,7 @@ function stackFrames(error: Error): Array<Record<string, unknown>> {
 
 async function postException(
   error: unknown,
-  context?: { area?: string; label?: string }
+  context?: TelemetryContext
 ): Promise<{ ok: boolean; status: number; eventId: string; detail: string }> {
   const parsed = parseDsn(SENTRY_DSN);
   if (!parsed) {
@@ -109,6 +119,8 @@ async function postException(
       os: process.platform,
       area: context?.area || 'unknown',
       label: context?.label || '',
+      voice: context?.voice || '',
+      script: context?.script || '',
     },
     contexts: {
       runtime: {
@@ -199,7 +211,7 @@ export function initTelemetry(
 
 export function captureException(
   error: unknown,
-  context?: { area?: string; label?: string }
+  context?: TelemetryContext
 ): void {
   if (!enabled) {
     log('Sentry skipped: telemetry is off');

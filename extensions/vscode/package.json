@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.63",
+  "version": "0.1.64",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -383,6 +383,7 @@
     "icons": "node scripts/build-icon-font.mjs",
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
+    "test": "tsc -p . && node tests/speech-text.test.mjs && node tests/host-player.test.mjs",
     "package": "npm run build && npx @vscode/vsce package --follow-symlinks",
     "publish:stores": "bash scripts/publish-stores.sh",
     "publish:ovsx": "bash scripts/publish-stores.sh --only-ovsx",

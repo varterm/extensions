@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.64 - 2026-09-14
+
+### Fixed
+- **Linux plays without ffmpeg.** Playback assumed `ffplay` and failed with `spawn ffplay ENOENT` on machines without it, which is most of them. Varterm now looks for `ffplay`, `mpv`, `mpg123`, `mpg321`, VLC, GStreamer, or SoX, and says which to install if it finds none, before generating any audio rather than after.
+- **A voice that cannot read your text says so.** Reading Chinese, Cyrillic, Arabic, Devanagari, Japanese, Korean, Hebrew, Thai, or Greek with an English voice produced `No audio generated. Please try different text.`, which blamed the text when the voice was the problem. The message now names the script, suggests a voice that works, and points at `vartermCursor.readAloudVoice`.
+- **A part with nothing to say no longer fails a read.** A markdown rule between two long paragraphs could be sent on its own, and a chunk of pure punctuation comes back as silence rather than audio.
+
+### Changed
+- Failed reads report the voice and the script of the text, so a report explains itself without having to be reproduced.
+
 ## 0.1.63 - 2026-09-12
 
 ### Fixed

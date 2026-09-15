@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.64 - 2026-09-14
+
+### Fixed
+- Linux playback works without ffmpeg installed. The Sentry error `spawn ffplay ENOENT` was a Linux user hitting a hardcoded `ffplay` with no fallback.
+- Reading text in a script the chosen voice cannot speak now explains itself and names a voice that works. The Sentry error `No audio generated. Please try different text.` came from an English voice being handed non-Latin text.
+- The Claude Code plugin no longer offers `aplay` or `paplay`. Neither reliably decodes MP3, so on a machine without ffplay or mpv they were picked and then failed.
+
+### Changed
+- Failed reads report the voice and the script of the text to Sentry, so a report can be diagnosed without reproducing it.
+- `/api/edge-tts` answers 422 rather than 500 for text it cannot voice, which stops clients retrying something that cannot succeed, and lists 66 voices across 31 locales instead of 10 English ones.
+
 ## 0.1.63 - 2026-09-12
 
 ### Fixed

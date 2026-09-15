@@ -31,7 +31,7 @@ switch (command) {
     console.log('Reading replies aloud.');
     if (!findPlayer()) {
       console.log(
-        'No audio player found, so nothing will actually play. Install ffmpeg for ffplay, or mpv.'
+        'No audio player found, so nothing will actually play. Install ffmpeg for ffplay, or one of mpv, mpg123, VLC, or SoX.'
       );
     }
     break;

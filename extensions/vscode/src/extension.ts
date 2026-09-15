@@ -5,6 +5,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { createTtsHttpClient } from '@varterm/tts-client';
+import {
+  findLinuxPlayer,
+  LINUX_PLAYERS,
+  NO_PLAYER_MESSAGE,
+  type HostPlayer,
+} from './host-player';
 import { sliceMp3FromMs } from './mp3';
 import {
   claimPlayback,
@@ -15,6 +21,7 @@ import {
   type PlaybackOwner,
 } from './playback-lock';
 import { PLAYER_VIEW_ID, VartermPlayerViewProvider } from './player-view';
+import { dominantScript, splitTextIntoChunks, voiceCannotSpeak } from './speech-text';
 import {
   getAutoReadEnabled,
   installVartermAgentHook,
@@ -1290,6 +1297,22 @@ function trimmedResumeFile(filePath: string, offsetMs: number): { path: string; 
   }
 }
 
+// Resolved once. A player appearing mid-session is rarer than the cost of
+// searching PATH before every clip.
+let resolvedLinuxPlayer: HostPlayer | null | undefined;
+
+function linuxPlayer(): HostPlayer | null {
+  if (resolvedLinuxPlayer === undefined) {
+    resolvedLinuxPlayer = findLinuxPlayer();
+    logInfo(
+      resolvedLinuxPlayer
+        ? `Audio player: ${resolvedLinuxPlayer.cmd}`
+        : `Audio player: none found on PATH (${LINUX_PLAYERS.map((p) => p.cmd).join(', ')})`
+    );
+  }
+  return resolvedLinuxPlayer;
+}
+
 function hostPlayerName(): string {
   if (process.platform === 'darwin') {
     return 'afplay';
@@ -1297,7 +1320,7 @@ function hostPlayerName(): string {
   if (process.platform === 'win32') {
     return 'Windows MediaPlayer';
   }
-  return 'ffplay';
+  return linuxPlayer()?.cmd || 'no audio player';
 }
 
 function spawnHostPlayer(filePath: string): ChildProcess {
@@ -1327,9 +1350,11 @@ function spawnHostPlayer(filePath: string): ChildProcess {
       { stdio: 'ignore', windowsHide: true }
     );
   }
-  return spawn('ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath], {
-    stdio: 'ignore',
-  });
+  const player = linuxPlayer();
+  if (!player) {
+    throw new Error(NO_PLAYER_MESSAGE);
+  }
+  return spawn(player.cmd, player.args(filePath), { stdio: 'ignore' });
 }
 
 function startChunk(index: number, generation: number, offsetMs = 0): void {
@@ -1360,7 +1385,17 @@ function startChunk(index: number, generation: number, offsetMs = 0): void {
   logInfo(
     `Start chunk ${playbackIndex + 1}/${expectedTrackCount || playbackFiles.length}${from} ${resume.path}`
   );
-  const child = spawnHostPlayer(resume.path);
+  let child: ChildProcess;
+  try {
+    child = spawnHostPlayer(resume.path);
+  } catch (error) {
+    // Nothing to play with. Fail the read rather than throwing out of a
+    // listener, where it would surface as an unhandled rejection.
+    playReject?.(error instanceof Error ? error : new Error(String(error)));
+    playResolve = undefined;
+    playReject = undefined;
+    return;
+  }
   livePlayers.add(child);
   playbackProcess = child;
 
@@ -1739,7 +1774,14 @@ function startPreviewAfplay(filePath: string, generation: number): void {
     forceKillChild(previewProcess);
     previewProcess = undefined;
   }
-  const child = spawnHostPlayer(filePath);
+  let child: ChildProcess;
+  try {
+    child = spawnHostPlayer(filePath);
+  } catch (error) {
+    // A voice preview is not worth a modal. The read itself will explain.
+    logInfo(error instanceof Error ? error.message : String(error));
+    return;
+  }
   previewProcess = child;
   child.on('close', () => {
     if (previewProcess === child) {
@@ -2320,6 +2362,12 @@ async function readTextAloud(
     }
   }
 
+  // Ask before synthesising rather than after. Generating a long reply only to
+  // discover there is nothing to play it with wastes the wait and the request.
+  if (process.platform === 'linux' && !linuxPlayer()) {
+    throw new Error(NO_PLAYER_MESSAGE);
+  }
+
   const spokenRate = getReadAloudRate(context);
   const spokenVoiceId = context.globalState.get<string>(VOICE_ID_KEY) || settings.readAloudVoice;
   latestSpoken = { text: normalized, label, rate: spokenRate, voiceId: spokenVoiceId };
@@ -2376,7 +2424,12 @@ async function readTextAloud(
         const premiumKeyMissing =
           providerToUse === 'premium' && /ELEVENLABS_API_KEY|ElevenLabs/i.test(message);
         if (!premiumKeyMissing) {
-          throw error;
+          // "No audio generated" reads as a dead end. When the cause is the
+          // voice rather than the text, say so and name the setting to change.
+          const mismatch = /No audio generated/i.test(message)
+            ? voiceCannotSpeak(chunkText, voiceToUse)
+            : undefined;
+          throw mismatch ? new Error(mismatch) : error;
         }
 
         providerToUse = 'edge';
@@ -2473,7 +2526,12 @@ async function readTextAloud(
     }
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`readTextAloud error: ${message}`);
-    captureException(error, { area: 'read', label });
+    captureException(error, {
+      area: 'read',
+      label,
+      voice: spokenVoiceId,
+      script: dominantScript(normalized),
+    });
     setPlaybackStatus('$(error) Varterm failed — click to retry', 'idle');
     getOutputChannel().show(true);
     playerProvider?.post({ type: 'error', label, message });
@@ -2687,63 +2745,6 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
       }
     })();
   }, 0);
-}
-
-function splitTextIntoChunks(text: string, maxChars: number): string[] {
-  const normalized = text.replace(/\r\n/g, '\n').trim();
-  if (!normalized) {
-    return [];
-  }
-
-  const paragraphs = normalized.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  const chunks: string[] = [];
-
-  const pushSized = (block: string) => {
-    if (block.length <= maxChars) {
-      chunks.push(block);
-      return;
-    }
-    let start = 0;
-    while (start < block.length) {
-      const end = Math.min(start + maxChars, block.length);
-      let slice = block.slice(start, end);
-      if (end < block.length) {
-        const breakIndex = Math.max(
-          slice.lastIndexOf('. '),
-          slice.lastIndexOf('? '),
-          slice.lastIndexOf('! '),
-          slice.lastIndexOf('\n'),
-          slice.lastIndexOf(' ')
-        );
-        if (breakIndex > Math.floor(maxChars * 0.35)) {
-          slice = slice.slice(0, breakIndex + 1);
-        }
-      }
-      const piece = slice.trim();
-      if (piece) {
-        chunks.push(piece);
-      }
-      start += Math.max(1, slice.length);
-    }
-  };
-
-  let current = '';
-  for (const para of paragraphs) {
-    if (!current) {
-      current = para;
-      continue;
-    }
-    if (current.length + 2 + para.length <= 180) {
-      current = `${current}\n\n${para}`;
-      continue;
-    }
-    pushSized(current);
-    current = para;
-  }
-  if (current) {
-    pushSized(current);
-  }
-  return chunks;
 }
 
 async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<void> {
