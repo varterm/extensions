@@ -22,8 +22,14 @@ claude --plugin-dir /path/to/varterm/extensions/plugins/claude-code
 ```
 
 You need Node 18 or later, and something that can play an MP3. macOS already
-has `afplay`. On Linux, any of `ffplay`, `mpv`, `paplay`, or `aplay` will do.
-Run `/varterm:status` to see which one was found.
+has `afplay`. On Linux, any of `ffplay` (from ffmpeg), `mpv`, `mpg123`,
+`mpg321`, `cvlc` (VLC), `gst-play-1.0`, or `play` (SoX) will do; installing
+ffmpeg is usually enough. The first one found on your `PATH` is used, in that
+order. Run `/varterm:status` to see which one was picked.
+
+`aplay` and `paplay` are deliberately not used. Both are WAV players and these
+clips are MP3, so a machine with one of them and nothing else would have had a
+player chosen and then fail to play anything.
 
 ## Use
 
@@ -40,6 +46,11 @@ Reading is on once the plugin is enabled. The commands are there to change that:
 Voice, speaking rate, and the length past which a reply is skipped can also be
 set through the plugin's own configuration, which `/plugin` will prompt for. Any
 Microsoft neural voice id works, which covers over a hundred languages.
+
+Those voices are locale specific: an English voice handed a reply in Chinese,
+Cyrillic, Arabic or Devanagari used to return silence and no explanation. That
+now comes back as an error naming a voice that can read it. Text in a script the
+voice does speak, and the odd foreign word inside English, are unaffected.
 
 ## What gets read
 

@@ -10,6 +10,8 @@ Running many Cursor windows? Install **once for your user** — not **Install Wo
 
 Prefer a file? Grab `varterm-cursor-*.vsix` from [GitHub Releases](https://github.com/varterm/extensions/releases) and run `Extensions: Install from VSIX...`.
 
+**On Linux**, one MP3 player needs to be on your `PATH`: `ffplay` (from ffmpeg), `mpv`, `mpg123`, `mpg321`, `cvlc` (VLC), `gst-play-1.0`, or `play` (SoX). Installing ffmpeg covers it. Varterm takes the first it finds and checks before synthesising, so a missing player is named up front rather than surfacing as a failure once audio is ready. macOS and Windows need nothing installed.
+
 More at [varterm.com/extensions](https://varterm.com/extensions).
 
 ## Highlight to listen
@@ -28,7 +30,7 @@ Click **Auto-read** in the status bar. When an agent reply **finishes**, it play
 It changes the loop: send the prompt, go back to your file, and let the answer come to you. No parking on the chat panel watching tokens stream, no scrolling back up to find the one line that mattered — jump back and hear it again.
 
 - One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other. Other windows show the mark dimmed while another one is talking, and pressing Play there moves playback over instead of starting a second copy.
-- Playback stays in the editor. macOS uses `afplay`, Windows uses a hidden player. Linux needs one of `ffplay` (from ffmpeg), `mpv`, `mpg123`, VLC, or SoX on your `PATH` — installing ffmpeg is usually enough, and Varterm says so rather than failing silently if none is there. No Music.app, no extra tab.
+- Playback stays in the editor — no Music.app, no extra tab. macOS and Windows need nothing installed; Linux wants an MP3 player, covered under Install.
 - Transport is icon-only while playing: jump back, pause, stop, jump forward, replay. A queue icon appears when something is waiting or you can go back. Auto-read joins the queue instead of cutting off the current listen.
 - The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
@@ -43,6 +45,18 @@ Built for text that does not fit in one request — whole files, RFCs, and long 
 - Hover the jump arrows to see part *n* of *total*, and move through them one at a time.
 - `vartermCursor.maxTotalTextChars` caps a single run (default 1,000,000 characters).
 
+## Voices and languages
+
+66 neural voices across 29 languages. Pick one from the `1×` chip → **Voice**, or `Varterm: Select Read-Aloud Voice`, and preview it before committing. Each entry shows its locale and a short description, so typing a language name finds its voices.
+
+Arabic, Bengali, Chinese (Simplified), Chinese (Traditional), Dutch, English (US, UK, Australia), Farsi, French, German, Hebrew, Hindi, Indonesian, Italian, Japanese, Korean, Malayalam, Polish, Portuguese, Romanian, Russian, Spanish, Swahili, Tamil, Telugu, Thai, Turkish, Ukrainian, Urdu, and Vietnamese.
+
+Varterm reads, it does not translate — a Spanish voice reads Spanish text as written.
+
+The list comes from the service rather than the extension, so voices added later show up without an update.
+
+Voices are locale specific, and a mismatched one returns silence rather than an error. Hand an English voice a page of Chinese and Varterm names a voice that can read it instead of leaving you with a failure and nothing to act on.
+
 ## Commands
 
 - `Varterm: Read Selection Aloud` — speak the highlight. Nothing is copied.
@@ -54,7 +68,7 @@ Built for text that does not fit in one request — whole files, RFCs, and long 
 - `Varterm: Read Last Agent Reply` — replay the last captured reply.
 - `Varterm: Pause Playback` / `Resume Playback` / `Stop Playback` / `Replay Last Audio`.
 - `Varterm: Reading Speed and Voice` — status bar speed chip: 0.75×–2×, voice, settings.
-- `Varterm: Select Read-Aloud Voice` — Edge and Premium voices.
+- `Varterm: Select Read-Aloud Voice` — 66 Edge voices across 29 languages, plus Premium.
 - `Varterm: Set ElevenLabs API Key` — stored in secure extension storage.
 - `Varterm: Connect` — only for a custom server or token.
 - `Varterm: Open Settings` / `Customize Keyboard Shortcuts`.

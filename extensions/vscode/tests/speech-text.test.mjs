@@ -67,7 +67,7 @@ const mismatches = [
   ['Chinese', '这是一个测试文本，用来检查语音。', 'zh-CN-XiaoxiaoNeural'],
   ['Devanagari', 'यह एक परीक्षण है और यह लंबा है', 'hi-IN-SwaraNeural'],
   ['Cyrillic', 'Это тестовый текст для проверки', 'ru-RU-SvetlanaNeural'],
-  ['Arabic', 'هذا اختبار طويل جدا للتحقق', 'ar-SA-ZariyahNeural'],
+  ['Arabic', 'هذا اختبار طويل جدا للتحقق', 'ar-EG-SalmaNeural'],
   ['Japanese', 'これはテストです、よろしく', 'ja-JP-NanamiNeural'],
   ['Korean', '이것은 테스트입니다 그리고', 'ko-KR-SunHiNeural'],
 ];

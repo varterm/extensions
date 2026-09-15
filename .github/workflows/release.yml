@@ -30,16 +30,31 @@ jobs:
       - name: Generate release notes
         id: notes
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+
+          # The version is compared as a literal string rather than a regex, so
+          # the dots cannot act as wildcards: 0.1.6 and 0.1.64 are both real
+          # releases and a pattern match would find the wrong one.
+          awk -v ver="$VERSION" '
+            /^## / { if (found) exit; if ($2 == ver) found = 1; next }
+            found { print }
+          ' CHANGELOG.md \
+            | awk 'NF {body = 1} body {line[++n] = $0; if (NF) last = n} END {for (i = 1; i <= last; i++) print line[i]}' \
+            > "$NOTES_FILE"
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "::warning::CHANGELOG.md has no section for $VERSION; publishing without notes."
+            echo "Built from tag ${GITHUB_REF_NAME}." > "$NOTES_FILE"
+          fi
+
           {
-            echo "## What's included"
-            echo "- Chrome extension package"
-            echo "- VS Code extension package"
             echo ""
-            echo "## Verification"
-            echo "- Built from tag ${GITHUB_REF_NAME}"
-            echo "- CI and packaging workflow completed successfully"
-          } > "$NOTES_FILE"
+            echo "### Assets"
+            echo "- \`varterm-cursor-${VERSION}.vsix\` — editor extension for Cursor and VS Code"
+            echo "- \`varterm-tts-chrome.zip\` — Chrome extension"
+          } >> "$NOTES_FILE"
+
           echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
