@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { dropBelongsToRoots, newestOwnedDrop } from '../dist/agent-drop.js';
+import { cacheIsCurrent, dropBelongsToRoots, newestOwnedDrop } from '../dist/agent-drop.js';
 
 const SEP = '/';
 const ROOT = '/Users/dev/src/varterm';
@@ -92,4 +92,22 @@ test('equal timestamps do not throw or pick a foreign reply', () => {
     SEP
   );
   assert.equal(tie?.text, 'x');
+});
+
+test('cached audio is replayed only while it is still the newest reply', () => {
+  assert.equal(cacheIsCurrent('reply two', 'reply two'), true);
+});
+
+test('a newer reply on disk beats what the window is holding', () => {
+  // The bug this guards: a window that missed a reply replayed the one before
+  // last, because holding audio was treated as proof of holding the latest.
+  assert.equal(cacheIsCurrent('reply one', 'reply two'), false);
+});
+
+test('with nothing on disk the cache is the only answer there is', () => {
+  assert.equal(cacheIsCurrent('reply one', ''), true);
+});
+
+test('an empty cache never looks current against a real reply', () => {
+  assert.equal(cacheIsCurrent('', 'reply two'), false);
 });

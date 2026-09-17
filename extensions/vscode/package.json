@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.65",
+  "version": "0.1.66",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -310,6 +310,18 @@
           "maximum": 5000,
           "description": "How far to rewind when resuming after a pause, in milliseconds. A small overlap makes sure no words are lost at the join."
         },
+        "vartermCursor.sharedListenQueue": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let every Cursor window feed one shared queue, so replies are read in the order they arrived no matter which project produced them. Turn this off to keep each window's queue to itself."
+        },
+        "vartermCursor.queueItemExpiryMinutes": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "maximum": 1440,
+          "description": "Drop queued replies that have waited longer than this many minutes, so a backlog does not read you stale answers. Set 0 to keep them until they play."
+        },
         "vartermCursor.telemetry": {
           "type": "boolean",
           "default": true,
@@ -388,7 +400,7 @@
     "icons": "node scripts/build-icon-font.mjs",
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
-    "test": "tsc -p . && node tests/speech-text.test.mjs && node tests/host-player.test.mjs && node tests/agent-drop.test.mjs && node tests/telemetry-filter.test.mjs",
+    "test": "tsc -p . && node tests/speech-text.test.mjs && node tests/host-player.test.mjs && node tests/agent-drop.test.mjs && node tests/telemetry-filter.test.mjs && node tests/listen-queue.test.mjs",
     "package": "npm run build && npx @vscode/vsce package --follow-symlinks",
     "publish:stores": "bash scripts/publish-stores.sh",
     "publish:ovsx": "bash scripts/publish-stores.sh --only-ovsx",

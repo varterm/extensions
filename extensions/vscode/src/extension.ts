@@ -21,6 +21,19 @@ import {
   type PlaybackOwner,
 } from './playback-lock';
 import { PLAYER_VIEW_ID, VartermPlayerViewProvider } from './player-view';
+import {
+  clearSharedQueue,
+  ownQueuePlace,
+  popSharedQueue,
+  pushSharedQueue,
+  readSharedQueue,
+  releaseSharedDrain,
+  removeSharedQueueItem,
+  sharedQueueBusyElsewhere,
+  watchListenQueue,
+  type SharedQueueItem,
+} from './listen-queue';
+import { cacheIsCurrent } from './agent-drop';
 import { dominantScript, splitTextIntoChunks, voiceCannotSpeak } from './speech-text';
 import {
   forgetAgentReplyCache,
@@ -105,6 +118,8 @@ type ExtensionSettings = {
   maxCachedAudioAgeHours: number;
   showPlayingIndicator: boolean;
   resumeRewindMs: number;
+  sharedListenQueue: boolean;
+  queueItemExpiryMinutes: number;
   telemetry: boolean;
 };
 
@@ -114,7 +129,9 @@ let isGeneratingAudio = false;
 let generationCts: vscode.CancellationTokenSource | undefined;
 let readGeneration = 0;
 let latestPlayback: { tracks: AudioTrack[]; label: string } | undefined;
-let lastAgentPlayback: { tracks: AudioTrack[]; label: string } | undefined;
+// The text is kept alongside the audio so a replay can tell whether what it is
+// holding is still the newest reply.
+let lastAgentPlayback: { tracks: AudioTrack[]; label: string; text: string } | undefined;
 let latestSpoken: { text: string; label: string; rate: number; voiceId: string } | undefined;
 let playerProvider: VartermPlayerViewProvider | undefined;
 let playbackProcess: ChildProcess | undefined;
@@ -152,6 +169,7 @@ let indicatorTimer: ReturnType<typeof setInterval> | undefined;
 let indicatorFrame = 0;
 let autoReadWatcher: { dispose: () => void } | undefined;
 let playbackLockWatcher: { dispose: () => void } | undefined;
+let listenQueueWatcher: { dispose: () => void } | undefined;
 // Another Cursor window that currently holds playback, so this window can show
 // what is going on instead of looking idle.
 let otherWindow: PlaybackOwner | undefined;
@@ -232,6 +250,23 @@ function refreshPlayingIndicator(): void {
     playingIndicator.color = new vscode.ThemeColor('descriptionForeground');
     playingIndicator.show();
     return;
+  }
+
+  // Something of this window's is in the line. Without this its mark looks the
+  // same as a window with nothing queued, so you cannot tell which window is
+  // about to speak and which is only listening to another one.
+  if (!isPlaybackBusy()) {
+    const place = windowQueuePlace();
+    if (place) {
+      playingIndicator.text = INDICATOR_PAUSED;
+      playingIndicator.tooltip =
+        place.total > 1
+          ? `Varterm has this window's reply waiting — ${place.position} of ${place.total} in the queue`
+          : "Varterm has this window's reply waiting";
+      playingIndicator.color = new vscode.ThemeColor('charts.yellow');
+      playingIndicator.show();
+      return;
+    }
   }
 
   // Nothing playing here, but another window has the audio. Show the mark
@@ -809,17 +844,96 @@ function currentListenSnapshot(): QueuedListen | undefined {
   };
 }
 
+function queueTtlMs(): number {
+  const minutes = getSettings().queueItemExpiryMinutes;
+  return minutes > 0 ? minutes * 60_000 : 0;
+}
+
+function sharedQueueEnabled(): boolean {
+  return getSettings().sharedListenQueue;
+}
+
+function windowOrigin(): string | undefined {
+  return vscode.workspace.workspaceFolders?.[0]?.name;
+}
+
+// The status bar refreshes on every playback state change, so the file is read
+// at most once a second rather than once per repaint.
+let sharedQueueCache: { items: SharedQueueItem[]; at: number } = { items: [], at: 0 };
+
+function sharedWaiting(): SharedQueueItem[] {
+  if (!sharedQueueEnabled()) {
+    return [];
+  }
+  const now = Date.now();
+  if (now - sharedQueueCache.at < 750) {
+    return sharedQueueCache.items;
+  }
+  sharedQueueCache = { items: readSharedQueue(queueTtlMs()), at: now };
+  return sharedQueueCache.items;
+}
+
+function forgetSharedQueueCache(): void {
+  sharedQueueCache = { items: [], at: 0 };
+}
+
+function waitingCount(): number {
+  return listenQueue.length + sharedWaiting().length;
+}
+
+function windowQueuePlace(): { position: number; total: number } | undefined {
+  return ownQueuePlace(listenQueue.length, sharedWaiting(), process.pid);
+}
+
+function releaseQueueClaim(): void {
+  if (!sharedQueueEnabled()) {
+    return;
+  }
+  releaseSharedDrain();
+  forgetSharedQueueCache();
+}
+
 function enqueueListen(item: Omit<QueuedListen, 'id'>): boolean {
   const text = item.text.trim();
   if (!text) {
     return false;
   }
-  if (latestSpoken?.text === text || listenQueue.some((queued) => queued.text === text)) {
+  if (latestSpoken?.text === text) {
+    return false;
+  }
+  // Resume items carry decoded audio and a pause offset that only mean anything
+  // in the window that paused, so they stay here. Everything else joins the line
+  // any window can read from.
+  if (sharedQueueEnabled() && !item.tracks?.length) {
+    const added = pushSharedQueue(
+      { text, label: item.label, origin: windowOrigin() },
+      queueTtlMs()
+    );
+    forgetSharedQueueCache();
+    refreshQueueBar();
+    return added;
+  }
+  if (listenQueue.some((queued) => queued.text === text)) {
     return false;
   }
   listenQueue.push({ ...item, id: `q-${Date.now()}-${listenQueue.length}`, text });
   refreshQueueBar();
   return true;
+}
+
+// Resume items come first: a window that was interrupted mid reply should finish
+// its own thought before picking up someone else's.
+function takeNextQueued(): QueuedListen | undefined {
+  const local = listenQueue.shift();
+  if (local) {
+    return local;
+  }
+  if (!sharedQueueEnabled()) {
+    return undefined;
+  }
+  const shared = popSharedQueue(queueTtlMs());
+  forgetSharedQueueCache();
+  return shared ? { id: shared.id, text: shared.text, label: shared.label } : undefined;
 }
 
 function pushListenHistory(item: QueuedListen): void {
@@ -841,15 +955,18 @@ function refreshQueueBar(): void {
   if (!queueBar) {
     return;
   }
-  const waiting = listenQueue.length;
+  const shared = sharedWaiting();
+  const waiting = listenQueue.length + shared.length;
   const previous = listenHistory.length;
   if (!waiting && !previous && !isPlaybackBusy()) {
     queueBar.hide();
     return;
   }
+  const elsewhere = shared.filter((item) => item.pid !== process.pid).length;
   queueBar.text = waiting ? `$(list-ordered) ${waiting}` : '$(list-flat)';
   queueBar.tooltip = [
     waiting ? `${waiting} waiting` : 'Nothing waiting',
+    elsewhere ? `${elsewhere} from other windows` : '',
     previous ? `${previous} you can go back to` : '',
     'Click to open the queue',
   ]
@@ -864,23 +981,36 @@ async function maybeAdvanceQueue(): Promise<void> {
     advancingQueue ||
     isPlaybackBusy() ||
     anotherWindowOwnsPlayback() ||
-    !listenQueue.length ||
+    !waitingCount() ||
     !extensionContext
   ) {
+    // Idle and reading nothing means we must not still be holding the shared
+    // queue, or every other window would sit waiting on us.
+    if (!advancingQueue && !isPlaybackBusy()) {
+      releaseQueueClaim();
+    }
+    refreshQueueBar();
+    return;
+  }
+  // Another window is already working through the shared line.
+  if (!listenQueue.length && sharedQueueEnabled() && sharedQueueBusyElsewhere()) {
     refreshQueueBar();
     return;
   }
   advancingQueue = true;
+  // Take the item before filing what just finished, so a window that loses the
+  // claim does not push a history entry for a read it never starts.
+  const next = takeNextQueued();
+  if (!next) {
+    advancingQueue = false;
+    refreshQueueBar();
+    return;
+  }
   const finished = currentListenSnapshot();
   if (finished) {
     pushListenHistory({ ...finished, offsetMs: 0, index: 0 });
   }
-  const next = listenQueue.shift();
   refreshQueueBar();
-  if (!next) {
-    advancingQueue = false;
-    return;
-  }
   try {
     await startQueuedListen(extensionContext, next);
   } catch (error) {
@@ -891,9 +1021,8 @@ async function maybeAdvanceQueue(): Promise<void> {
     }
   } finally {
     advancingQueue = false;
-    if (!isPlaybackBusy() && listenQueue.length) {
-      void maybeAdvanceQueue();
-    }
+    // Either there is more to read, or the guard above hands the queue back.
+    void maybeAdvanceQueue();
   }
 }
 
@@ -910,7 +1039,7 @@ async function startQueuedListen(
           voiceId: currentVoiceId(context),
         }
       : latestSpoken;
-    rememberPlayback(item.tracks, item.label);
+    rememberPlayback(item.tracks, item.label, item.text || '');
     await playTracksInCursor(context, item.tracks, item.index ?? 0, item.offsetMs ?? 0);
     return;
   }
@@ -919,7 +1048,7 @@ async function startQueuedListen(
 
 async function openListenQueue(context: vscode.ExtensionContext): Promise<void> {
   type QueuePick = vscode.QuickPickItem & {
-    action?: 'queued' | 'history' | 'clear';
+    action?: 'queued' | 'shared' | 'history' | 'clear';
     item?: QueuedListen;
   };
   const items: QueuePick[] = [];
@@ -939,6 +1068,16 @@ async function openListenQueue(context: vscode.ExtensionContext): Promise<void> 
       item: queued,
     });
   }
+  for (const queued of sharedWaiting()) {
+    const elsewhere = queued.pid !== process.pid;
+    items.push({
+      label: `$(clock) Up next: ${queued.label}`,
+      description: listenPreview(queued.text),
+      detail: elsewhere && queued.origin ? `From ${queued.origin}` : undefined,
+      action: 'shared',
+      item: { id: queued.id, text: queued.text, label: queued.label },
+    });
+  }
   for (let i = listenHistory.length - 1; i >= 0; i -= 1) {
     const previous = listenHistory[i];
     items.push({
@@ -948,8 +1087,12 @@ async function openListenQueue(context: vscode.ExtensionContext): Promise<void> 
       item: previous,
     });
   }
-  if (listenQueue.length) {
-    items.push({ label: '$(discard) Clear waiting items', action: 'clear' });
+  if (waitingCount()) {
+    items.push({
+      label: '$(discard) Clear waiting items',
+      detail: sharedQueueEnabled() ? 'Clears the queue for every window' : undefined,
+      action: 'clear',
+    });
   }
   if (!items.length) {
     vscode.window.showInformationMessage('Nothing in the listen queue yet.');
@@ -964,6 +1107,10 @@ async function openListenQueue(context: vscode.ExtensionContext): Promise<void> 
   }
   if (picked.action === 'clear') {
     listenQueue.length = 0;
+    if (sharedQueueEnabled()) {
+      clearSharedQueue();
+      forgetSharedQueueCache();
+    }
     refreshQueueBar();
     return;
   }
@@ -975,6 +1122,11 @@ async function openListenQueue(context: vscode.ExtensionContext): Promise<void> 
     if (index >= 0) {
       listenQueue.splice(index, 1);
     }
+  }
+  if (picked.action === 'shared' && picked.item) {
+    // Claim it before playing so no other window pops the same item.
+    removeSharedQueueItem(picked.item.id, queueTtlMs());
+    forgetSharedQueueCache();
   }
   if (isPlaybackBusy()) {
     const snap = currentListenSnapshot();
@@ -1005,6 +1157,7 @@ function handlePlaybackLockChange(): void {
   const owner = readPlaybackOwner();
   const foreign = ownedByAnotherWindow(owner) ? owner : undefined;
   const changed = foreign?.pid !== otherWindow?.pid || foreign?.state !== otherWindow?.state;
+  const speakerFreed = Boolean(otherWindow) && !foreign;
   otherWindow = foreign;
 
   // Only yield when the other window pressed Play (steal). Auto-read claims
@@ -1024,6 +1177,28 @@ function handlePlaybackLockChange(): void {
 
   if (changed) {
     refreshTransport();
+  }
+
+  // Everything else that drains the queue hangs off this window finishing its
+  // own playback. A window that queued while someone else held the speaker has
+  // nothing of its own to finish, so without this its queue waits forever.
+  //
+  // Every idle window reaches this at the same moment and the playback lock is
+  // a last-writer-wins file rather than an atomic claim, so they are staggered
+  // to give one of them time to claim before the rest re-check. This narrows
+  // the race rather than closing it.
+  if (speakerFreed) {
+    setTimeout(() => void maybeAdvanceQueue(), 120 + Math.floor(Math.random() * 480));
+  }
+}
+
+// Another window may have added work, or items may have aged out. Only an idle
+// window can pick work up, and the claim inside the pop decides which one does.
+function handleListenQueueChange(): void {
+  forgetSharedQueueCache();
+  refreshTransport();
+  if (!isPlaybackBusy() && !anotherWindowOwnsPlayback() && waitingCount()) {
+    void maybeAdvanceQueue();
   }
 }
 
@@ -1561,6 +1736,8 @@ function getSettings(): ExtensionSettings {
     maxCachedAudioAgeHours: config.get<number>('maxCachedAudioAgeHours', 24),
     showPlayingIndicator: config.get<boolean>('showPlayingIndicator', true),
     resumeRewindMs: config.get<number>('resumeRewindMs', 600),
+    sharedListenQueue: config.get<boolean>('sharedListenQueue', true),
+    queueItemExpiryMinutes: config.get<number>('queueItemExpiryMinutes', 10),
     telemetry: config.get<boolean>('telemetry', true),
   };
 }
@@ -2320,11 +2497,26 @@ function isCurrentRead(generation: number, cts: vscode.CancellationTokenSource):
   return generation === readGeneration && generationCts === cts;
 }
 
-function rememberPlayback(tracks: AudioTrack[], label: string): void {
+function rememberPlayback(tracks: AudioTrack[], label: string, text: string): void {
   latestPlayback = { tracks: tracks.slice(), label };
   if (label === 'agent reply') {
-    lastAgentPlayback = { tracks: tracks.slice(), label };
+    lastAgentPlayback = { tracks: tracks.slice(), label, text };
   }
+}
+
+/**
+ * Cached audio, but only while it is still the newest reply this window owns.
+ *
+ * A window does not play every reply — auto-read can be off, another window can
+ * claim one, or it can be queued behind something still playing. Replaying
+ * whatever happens to be in memory then hands back the reply before last, which
+ * is worse than a pause while the current one is synthesised.
+ */
+function freshAgentPlayback(): { tracks: AudioTrack[]; label: string; text: string } | undefined {
+  if (!lastAgentPlayback?.tracks.length) {
+    return undefined;
+  }
+  return cacheIsCurrent(lastAgentPlayback.text, readLastAgentText()) ? lastAgentPlayback : undefined;
 }
 
 async function readTextAloud(
@@ -2359,8 +2551,8 @@ async function readTextAloud(
     if (enqueueListen({ text: normalized, label })) {
       logInfo(
         otherOwns
-          ? `Another window is playing; queued agent reply (${listenQueue.length} waiting)`
-          : `Queued agent reply (${listenQueue.length} waiting)`
+          ? `Another window is playing; queued agent reply (${waitingCount()} waiting)`
+          : `Queued agent reply (${waitingCount()} waiting)`
       );
     }
     options?.onStarted?.();
@@ -2507,7 +2699,7 @@ async function readTextAloud(
         base64: Buffer.from(audioBytes).toString('base64'),
       });
       files.push(uri.fsPath);
-      rememberPlayback(tracks, label);
+      rememberPlayback(tracks, label, normalized);
       playbackFiles = files;
 
       if (waitingForChunk !== undefined && waitingForChunk < files.length) {
@@ -2824,9 +3016,10 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  if (lastAgentPlayback?.tracks.length) {
-    latestPlayback = lastAgentPlayback;
-    await playTracksInCursor(context, lastAgentPlayback.tracks);
+  const cachedAgent = freshAgentPlayback();
+  if (cachedAgent) {
+    latestPlayback = cachedAgent;
+    await playTracksInCursor(context, cachedAgent.tracks);
     return;
   }
 
@@ -3058,6 +3251,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   playbackLockWatcher = watchPlaybackLock(handlePlaybackLockChange);
   context.subscriptions.push({ dispose: () => playbackLockWatcher?.dispose() });
+  listenQueueWatcher = watchListenQueue(handleListenQueueChange);
+  context.subscriptions.push({ dispose: () => listenQueueWatcher?.dispose() });
   handlePlaybackLockChange();
 
   refreshTransport();
@@ -3112,9 +3307,10 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.readSelectionOrClipboard', () => readSelectionOrClipboard(context));
   register('vartermCursor.readErrorsAloud', () => readErrorsAloud(context));
   register('vartermCursor.readLastAgentReply', async () => {
-    if (lastAgentPlayback?.tracks.length) {
-      latestPlayback = lastAgentPlayback;
-      await playTracksInCursor(context, lastAgentPlayback.tracks);
+    const cached = freshAgentPlayback();
+    if (cached) {
+      latestPlayback = cached;
+      await playTracksInCursor(context, cached.tracks);
       return;
     }
     const text = readLastAgentText();
@@ -3182,6 +3378,8 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   autoReadWatcher?.dispose();
   playbackLockWatcher?.dispose();
+  listenQueueWatcher?.dispose();
+  releaseSharedDrain();
   stopIndicatorAnimation();
   stopHostPlayback();
   releasePlayback();

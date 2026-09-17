@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.66 - 2026-09-17
+
+### Added
+- Every window now feeds one reading queue, so replies are read in the order they arrived rather than in whatever order the windows noticed the speaker was free. Whichever window is idle reads the next item, and the queue picker shows which project each one came from. Set `vartermCursor.sharedListenQueue` to false to keep a window's queue to itself, and `vartermCursor.queueItemExpiryMinutes` to stop a backlog reading out answers old enough to no longer be worth hearing.
+- A window with a reply waiting now shows the mark in amber, and says where it sits in the line. Green moving bars still mean the reading is happening here. Previously a window waiting its turn looked exactly like one that merely had a neighbour talking, so with several projects open there was no way to tell which one was about to speak.
+
+### Fixed
+- A reply queued while another window was speaking could wait indefinitely. Everything that moved the queue along ran when a window finished reading something of its own, so a window that was only ever waiting its turn had nothing to finish and was never told the speaker had freed up. Releasing the speaker now nudges the other windows.
+- Two windows could start reading at the same moment. The speaker is only claimed once audio begins, which leaves the whole synthesis step looking idle to everyone else, so taking an item from the queue now claims the queue in the same write. A window that is closed mid-read hands it straight back.
+- Replaying the last agent reply could hand back the one before it. The replay preferred audio the window already had, and holding audio is not proof of holding the latest reply: a window only caches what it actually played, and it does not play everything — auto-read may be off, another window may claim a reply, or it may be queued behind something. The cache is now used only while it still matches the newest reply for that window, and anything else is synthesised fresh.
+
 ## 0.1.65 - 2026-09-17
 
 ### Added

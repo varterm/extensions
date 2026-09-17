@@ -1,4 +1,4 @@
-# Submit Varterm TTS 0.1.65
+# Submit Varterm TTS 0.1.66
 
 Both stores take their **short description** from `package.json` and their **long description** from `README.md` when you publish this VSIX. Neither is edited in the store UI; change the files and publish.
 
@@ -8,15 +8,11 @@ npm run publish:stores      # both stores
 npm run publish:ovsx        # Open VSX only, no Azure token needed
 ```
 
-Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.65.vsix`
+Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.66.vsix`
 
-Current state: the Marketplace is on **0.1.62**, Open VSX on **0.1.64**. Publishing moves Marketplace users forward three versions and brings the two stores back into line.
+Current state: both stores are on **0.1.65** and in step with each other for the first time in several releases, so this is a straight one-version bump on both. Nothing is outstanding from an earlier release, and the listing copy in this VSIX is current.
 
-## This release carries the listing copy that 0.1.64 missed
-
-The **Voices and languages** section and the Linux player note landed in `README.md` after 0.1.64 was packaged, so neither store ever showed them — a published version is immutable and could not be corrected. 0.1.65 is packaged from the current README, so both stores pick that copy up along with this release's own additions. Nothing is outstanding from 0.1.64.
-
-Because the long description ships *inside* the VSIX, any further README edits have to happen before `npm run package`, not after.
+Because the long description ships *inside* the VSIX, any further README edits have to happen before `npm run package`, not after. A published version cannot be replaced, so late copy waits for the next one.
 
 ---
 
@@ -26,17 +22,17 @@ Because the long description ships *inside* the VSIX, any further README edits h
 Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.
 ```
 
-Unchanged in 0.1.65.
+Unchanged in 0.1.66.
 
 ---
 
 ## What's new
 
 ```
-Hear the last agent reply again from the status bar or ⌘⇧⌥A — no copying, and each window keeps its own. Text with nothing speakable in it now says so instead of ending in silence. Plus everything 0.1.64 added: Linux plays without ffmpeg, 66 voices across 29 languages, and a voice handed text it cannot read names one that can.
+Open several projects at once and they now share one reading queue, so replies are read in the order they arrived and whichever window is free reads the next. The status bar says which window is talking and which is waiting its turn. Fixes a reply queued behind another window that could wait indefinitely, and two windows that could start reading at the same moment.
 ```
 
-The last sentence is there because Marketplace users are coming from 0.1.62 and have not seen the 0.1.64 notes.
+Both stores are coming from 0.1.65, so this covers only what 0.1.66 changes.
 
 ---
 
@@ -46,7 +42,7 @@ The last sentence is there because Marketplace users are coming from 0.1.62 and 
 
 1. https://marketplace.visualstudio.com/manage/publishers/varterm
 2. **varterm.varterm-cursor** → **… → Update**
-3. Upload `varterm-cursor-0.1.65.vsix`
+3. Upload `varterm-cursor-0.1.66.vsix`
 
 ## Checking what each store is serving
 

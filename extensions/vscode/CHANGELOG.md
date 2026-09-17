@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.66 - 2026-09-17
+
+### Added
+- One reading queue shared by every window, so replies are read in the order they arrived instead of the order windows happened to notice the speaker was free. Whichever window is idle reads the next one, and the queue shows which project each item came from. Turn off `vartermCursor.sharedListenQueue` to keep each window's queue to itself; use `vartermCursor.queueItemExpiryMinutes` to drop items that have waited too long to still be worth hearing.
+- A window with a reply waiting shows the mark in amber and says where it sits in the line, so you can tell it apart at a glance from the window doing the talking — green bars, moving — and from one that is simply idle.
+
+### Fixed
+- A reply queued while another window was speaking could wait indefinitely, because the queue only ever moved along when a window finished reading something of its own.
+- Two windows could start reading at once, since the speaker is not claimed until audio begins and synthesis looks idle to every other window.
+- Replaying the last agent reply could play the one before it. A window only caches audio for replies it actually played, and it does not play them all — auto-read may be off, another window may claim one, or it may be queued — so the cached audio was often not the newest reply. It is now replayed only when it still matches the latest reply, and synthesised fresh otherwise.
+
 ## 0.1.65 - 2026-09-17
 
 ### Added

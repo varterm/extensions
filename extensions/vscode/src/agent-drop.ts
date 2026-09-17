@@ -25,6 +25,17 @@ export function dropBelongsToRoots(
 }
 
 /**
+ * Whether audio already in hand is still worth replaying.
+ *
+ * A window does not play every reply, so holding audio is not proof of holding
+ * the latest one. With nothing on disk to compare against the cache wins, since
+ * it is the only thing left; otherwise the texts have to agree.
+ */
+export function cacheIsCurrent(cachedText: string, newestText: string): boolean {
+  return !newestText || newestText === cachedText;
+}
+
+/**
  * The most recent reply among those this window may replay.
  *
  * A multi-root window can own more than one project's replies, so ownership

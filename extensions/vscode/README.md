@@ -32,7 +32,9 @@ It changes the loop: send the prompt, go back to your file, and let the answer c
 - One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other. Other windows show the mark dimmed while another one is talking, and pressing Play there moves playback over instead of starting a second copy.
 - Playback stays in the editor — no Music.app, no extra tab. macOS and Windows need nothing installed; Linux wants an MP3 player, covered under Install.
 - Transport is icon-only while playing: jump back, pause, stop, jump forward, replay. A queue icon appears when something is waiting or you can go back. Auto-read joins the queue instead of cutting off the current listen.
+- With several projects open, all of them feed one queue, so replies are read in the order they arrived and whichever window is free reads the next. The queue lists which project each one came from. Anything still waiting after ten minutes is dropped rather than read out late.
 - The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
+- The mark also tells you which window is next: green and moving means the reading is happening here, amber means this window has a reply waiting and hovering says where it sits in the line, and a dim static mark means another window is talking.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
 - Clipboard and pasted text interrupt whatever is playing. The next finished agent reply takes the speaker back — you do not need to toggle Auto-read.
 - **Missed it? Press the speech bubble** in the status bar, or `⌘⇧⌥A` / `Ctrl+Shift+Alt+A`, to hear the last reply again. It appears once there is a reply to repeat and replays cached audio when there is some, so nothing is re-synthesised. Each window keeps its own last reply, so opening a dozen projects at once does not cost you the one you were listening to, and a window never reads out an answer to a question another project asked.
@@ -93,6 +95,8 @@ Everything lives under `vartermCursor.*`:
 - `autoReadAgentOutput` — mirrored from the status bar. Off/On after restart comes from `~/.cursor/varterm-autoread.json`, so an update cannot turn it back on.
 - `showPlayingIndicator` — the animated meter in the status bar (default on).
 - `resumeRewindMs` — how far resume rewinds after a pause (default 600ms) so no words are lost at the join.
+- `sharedListenQueue` (default on) — every window feeds one queue. Off keeps a window's queue to itself.
+- `queueItemExpiryMinutes` (default 10; `0` never expires) — drop queued replies that have waited longer than this.
 - `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
 - `requestTimeoutMs`, `requestRetries` — for very long passages.
 - `elevenLabsApiKey` — plain-text fallback; the secure command is preferred.
