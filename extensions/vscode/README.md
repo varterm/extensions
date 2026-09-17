@@ -35,6 +35,7 @@ It changes the loop: send the prompt, go back to your file, and let the answer c
 - The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
 - Clipboard and pasted text interrupt whatever is playing. The next finished agent reply takes the speaker back — you do not need to toggle Auto-read.
+- **Missed it? Press the speech bubble** in the status bar, or `⌘⇧⌥A` / `Ctrl+Shift+Alt+A`, to hear the last reply again. It appears once there is a reply to repeat and replays cached audio when there is some, so nothing is re-synthesised. Each window keeps its own last reply, so opening a dozen projects at once does not cost you the one you were listening to, and a window never reads out an answer to a question another project asked.
 
 ## Long form
 
@@ -65,7 +66,7 @@ Voices are locale specific, and a mismatched one returns silence rather than an 
 - `Varterm: Read Clipboard Aloud` — speak whatever you copied.
 - `Varterm: Read Errors & Warnings Aloud` — speak diagnostics for the current file.
 - `Varterm: Toggle Auto-Read` — agent replies play when they finish.
-- `Varterm: Read Last Agent Reply` — replay the last captured reply.
+- `Varterm: Read Last Agent Reply` — hear the last reply again, from the status bar speech-bubble or `⌘⇧⌥A` / `Ctrl+Shift+Alt+A`. No copying.
 - `Varterm: Pause Playback` / `Resume Playback` / `Stop Playback` / `Replay Last Audio`.
 - `Varterm: Reading Speed and Voice` — status bar speed chip: 0.75×–2×, voice, settings.
 - `Varterm: Select Read-Aloud Voice` — 66 Edge voices across 29 languages, plus Premium.
@@ -80,6 +81,7 @@ Voices are locale specific, and a mismatched one returns silence rather than an 
 |--------|-------|-----------------|
 | Read editor / selection | `⌘+Shift+⌥+R` | `Ctrl+Shift+R` |
 | Read clipboard | `⌘+Shift+⌥+L` | `Ctrl+Shift+Y` |
+| Read last agent reply again | `⌘+Shift+⌥+A` | `Ctrl+Shift+Alt+A` |
 
 Change or remove them with **`Varterm: Customize Keyboard Shortcuts`**.
 

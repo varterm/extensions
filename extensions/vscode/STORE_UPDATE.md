@@ -1,4 +1,4 @@
-# Submit Varterm TTS 0.1.64
+# Submit Varterm TTS 0.1.65
 
 Both stores take their **short description** from `package.json` and their **long description** from `README.md` when you publish this VSIX. Neither is edited in the store UI; change the files and publish.
 
@@ -8,15 +8,15 @@ npm run publish:stores      # both stores
 npm run publish:ovsx        # Open VSX only, no Azure token needed
 ```
 
-Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.64.vsix`
+Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.65.vsix`
 
-Current state: Open VSX is on **0.1.64**. The Marketplace is on **0.1.62** — 0.1.63 never reached it — so publishing there moves users forward two versions.
+Current state: the Marketplace is on **0.1.62**, Open VSX on **0.1.64**. Publishing moves Marketplace users forward three versions and brings the two stores back into line.
 
-## The listing copy is behind the repo
+## This release carries the listing copy that 0.1.64 missed
 
-`README.md` gained a **Voices and languages** section and moved the Linux player requirement into Install, but that happened *after* `varterm-cursor-0.1.64.vsix` was packaged and published. The shipped VSIX carries the previous README, so neither store is showing the new copy and Open VSX cannot be corrected — a published version is immutable.
+The **Voices and languages** section and the Linux player note landed in `README.md` after 0.1.64 was packaged, so neither store ever showed them — a published version is immutable and could not be corrected. 0.1.65 is packaged from the current README, so both stores pick that copy up along with this release's own additions. Nothing is outstanding from 0.1.64.
 
-Publish the **existing** VSIX to the Marketplace rather than repackaging. Repackaging would produce a second, different 0.1.64: one on Open VSX, another on the Marketplace, and a third already attached to the GitHub release. The listing copy then goes out with **0.1.65**, and both stores pick it up together.
+Because the long description ships *inside* the VSIX, any further README edits have to happen before `npm run package`, not after.
 
 ---
 
@@ -26,15 +26,17 @@ Publish the **existing** VSIX to the Marketplace rather than repackaging. Repack
 Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.
 ```
 
-Unchanged in 0.1.64.
+Unchanged in 0.1.65.
 
 ---
 
 ## What's new
 
 ```
-Linux plays without ffmpeg installed — mpv, mpg123, VLC and SoX all work now, and a missing player is named instead of failing silently. 66 voices across 29 languages. A voice handed text it cannot read says so and names one that can.
+Hear the last agent reply again from the status bar or ⌘⇧⌥A — no copying, and each window keeps its own. Text with nothing speakable in it now says so instead of ending in silence. Plus everything 0.1.64 added: Linux plays without ffmpeg, 66 voices across 29 languages, and a voice handed text it cannot read names one that can.
 ```
+
+The last sentence is there because Marketplace users are coming from 0.1.62 and have not seen the 0.1.64 notes.
 
 ---
 
@@ -44,7 +46,7 @@ Linux plays without ffmpeg installed — mpv, mpg123, VLC and SoX all work now, 
 
 1. https://marketplace.visualstudio.com/manage/publishers/varterm
 2. **varterm.varterm-cursor** → **… → Update**
-3. Upload `varterm-cursor-0.1.64.vsix`
+3. Upload `varterm-cursor-0.1.65.vsix`
 
 ## Checking what each store is serving
 
@@ -52,4 +54,4 @@ Linux plays without ffmpeg installed — mpv, mpg123, VLC and SoX all work now, 
 npm run stores:status
 ```
 
-The Marketplace search index lags its own API by a few minutes, so the public listing can show the previous version briefly after a successful publish. Open VSX holds a new version inactive until its scan finishes, which took about four minutes for 0.1.64 — during that window the API 404s the version even though publishing succeeded.
+The Marketplace search index lags its own API by a few minutes, so the public listing can show the previous version briefly after a successful publish. Open VSX holds a new version inactive until its scan finishes, which took about four minutes for 0.1.64 — during that window the API 404s the version even though publishing succeeded. Wait rather than re-running the publish.

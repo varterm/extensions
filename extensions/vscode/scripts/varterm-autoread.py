@@ -1,10 +1,37 @@
 #!/usr/bin/python3
 """Write the latest Cursor agent reply for Varterm auto-read."""
 
+import hashlib
 import json
 import sys
 import time
 from pathlib import Path
+
+# Per-workspace replies older than this are dropped on the next write. Without
+# it the directory keeps a file for every project ever opened.
+REPLY_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
+def write_workspace_reply(out_dir, root, payload):
+    """Keep a copy per project.
+
+    The shared file holds one reply for the whole machine, so a window loses its
+    own the moment any other window gets an answer. Each window reads back the
+    newest file that belongs to it, so the name only has to be unique and stable
+    for a given path.
+    """
+    replies_dir = out_dir / "varterm-agent-replies"
+    replies_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(root.encode("utf-8")).hexdigest()[:16]
+    (replies_dir / f"{key}.json").write_text(payload, encoding="utf-8")
+
+    cutoff = time.time() - REPLY_TTL_SECONDS
+    for stale in replies_dir.glob("*.json"):
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            pass
 
 
 def extract_text(data):
@@ -67,9 +94,15 @@ debug = {
 }
 (out_dir / "varterm-last-hook.json").write_text(json.dumps(debug, indent=2), encoding="utf-8")
 if text and auto_read_on:
-    (out_dir / "varterm-last-agent.json").write_text(
-        json.dumps({"text": text, "ts": time.time(), "cwd": cwd, "workspace": workspace}),
-        encoding="utf-8",
-    )
+    payload = json.dumps({"text": text, "ts": time.time(), "cwd": cwd, "workspace": workspace})
+    (out_dir / "varterm-last-agent.json").write_text(payload, encoding="utf-8")
+    root = workspace or cwd
+    if root:
+        try:
+            write_workspace_reply(out_dir, root, payload)
+        except OSError:
+            # The shared file above is what auto-read needs; a failure to keep
+            # the per-project copy must not cost the user the reply itself.
+            pass
 
 sys.stdout.write("{}\n")

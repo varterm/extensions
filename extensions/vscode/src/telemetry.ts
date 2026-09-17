@@ -1,22 +1,13 @@
 import * as https from 'node:https';
 import * as os from 'node:os';
 import * as vscode from 'vscode';
+import { shouldReportError } from './telemetry-filter';
 
 // Public ingest DSN (write-only). Restrict allowed origins in the Sentry project
 // if you want a tighter lock. Do not put a Sentry auth token here.
 const SENTRY_DSN =
   'https://0d355b6b4c757157da32d72378e1d46d@o4512069168594944.ingest.us.sentry.io/4512069236817920';
 
-const SKIP_MESSAGES = [
-  'Cancelled',
-  'Operation cancelled',
-  'Nothing is playing.',
-  'Nothing is paused.',
-  'No audio to replay yet.',
-  'No agent reply captured yet',
-  'No text available to read aloud',
-  'Background playback currently uses macOS afplay',
-];
 
 // Set at the point of failure so a report explains itself. `voice` and `script`
 // are what a read was attempted with, which is the context that turns a vague
@@ -59,10 +50,6 @@ function telemetryAllowed(): boolean {
   return vscode.workspace.getConfiguration('vartermCursor').get<boolean>('telemetry', true);
 }
 
-function shouldReport(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return !SKIP_MESSAGES.some((skip) => message.includes(skip));
-}
 
 function scrubText(value: string): string {
   const trimmed = value.replace(/\s+/g, ' ').trim();
@@ -217,7 +204,7 @@ export function captureException(
     log('Sentry skipped: telemetry is off');
     return;
   }
-  if (!shouldReport(error)) {
+  if (!shouldReportError(error)) {
     return;
   }
   void postException(error, context).then((result) => {

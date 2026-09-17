@@ -23,9 +23,12 @@ import {
 import { PLAYER_VIEW_ID, VartermPlayerViewProvider } from './player-view';
 import { dominantScript, splitTextIntoChunks, voiceCannotSpeak } from './speech-text';
 import {
+  forgetAgentReplyCache,
   getAutoReadEnabled,
+  hasAgentReplyForThisWindow,
   installVartermAgentHook,
   isAutoReadAllowed,
+  lastAgentReplyIsFromAnotherWindow,
   loadAutoReadEnabled,
   persistAutoReadEnabled,
   readLastAgentText,
@@ -51,9 +54,14 @@ const AUTO_READ_TIP_KEY = 'vartermCursor.autoReadTipShown';
 const RATE_KEY = 'vartermCursor.readAloudRate';
 const SPEED_CHOICES = [0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 
+// Matches what the service says for the same condition, so the two surfaces do
+// not describe one situation two ways.
+const NOTHING_TO_READ_MESSAGE = 'That text has nothing to read aloud.';
+
 const SHIPPED_SHORTCUTS = {
   readClipboardAloud: { mac: 'cmd+shift+alt+l', win: 'ctrl+shift+y' },
   readEditorAloud: { mac: 'cmd+shift+alt+r', win: 'ctrl+shift+r' },
+  readLastAgentReply: { mac: 'cmd+shift+alt+a', win: 'ctrl+shift+alt+a' },
 } as const;
 
 type IngestResult = {
@@ -134,6 +142,7 @@ let stopStatusBar: vscode.StatusBarItem | undefined;
 let jumpBackBar: vscode.StatusBarItem | undefined;
 let jumpForwardBar: vscode.StatusBarItem | undefined;
 let replayBar: vscode.StatusBarItem | undefined;
+let agentReplyBar: vscode.StatusBarItem | undefined;
 let autoReadStatusBar: vscode.StatusBarItem | undefined;
 let listenBar: vscode.StatusBarItem | undefined;
 let queueBar: vscode.StatusBarItem | undefined;
@@ -309,8 +318,25 @@ function refreshTransport(): void {
   }
 
   refreshPlayingIndicator();
+  refreshAgentReplyBar();
   refreshListenBar();
   refreshQueueBar();
+}
+
+// Hidden when there is nothing this window could replay, so the button never
+// sits there rejecting clicks. Audio already loaded here counts even when the
+// drop file has since been overwritten by another window.
+function refreshAgentReplyBar(): void {
+  if (!agentReplyBar) {
+    return;
+  }
+  if (lastAgentPlayback?.tracks.length || hasAgentReplyForThisWindow()) {
+    agentReplyBar.text = '$(comment-discussion)';
+    agentReplyBar.tooltip = `Read the last agent reply again (${getShortcutLabel('readLastAgentReply')})`;
+    agentReplyBar.show();
+  } else {
+    agentReplyBar.hide();
+  }
 }
 
 let rememberedSelection = '';
@@ -1067,6 +1093,8 @@ async function setAutoReadEnabled(
   }
 
   autoReadWatcher = watchAgentDropFile((text, markHeard) => {
+    forgetAgentReplyCache();
+    refreshAgentReplyBar();
     if (!isAutoReadAllowed()) {
       markHeard();
       return;
@@ -2386,6 +2414,22 @@ async function readTextAloud(
 
     // Paragraph-sized tracks so each jump forward skips one remaining part, not the whole reply.
     const chunks = splitTextIntoChunks(normalized, 450);
+
+    // A horizontal rule, a row of emoji or bare punctuation leaves nothing to
+    // synthesise. Saying so beats the spinner clearing with no sound and no
+    // reason, which reads as a failure. Auto-read stays quiet: a reply that
+    // filters down to nothing is not worth interrupting anyone over.
+    if (!chunks.length) {
+      logInfo('Nothing speakable in that text; skipping the read');
+      if (!options?.autoRead) {
+        void vscode.window.showInformationMessage(NOTHING_TO_READ_MESSAGE);
+        playerProvider?.post({ type: 'notice', label, message: NOTHING_TO_READ_MESSAGE });
+      }
+      setIdleStatus();
+      options?.onStarted?.();
+      return;
+    }
+
     expectedTrackCount = chunks.length;
     waitingForChunk = undefined;
     playbackFiles = [];
@@ -2928,7 +2972,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // the Auto-read label used to sit at 79, between the meter and Stop, which
   // split the transport into two halves with a word wedged in the middle.
   //
-  //   jump back | play/pause | stop | jump forward | replay | meter | Auto-read | listen | speed
+  //   jump back | play/pause | stop | jump forward | replay | meter | Auto-read | agent reply | listen | speed
   const ORDER = {
     jumpBack: 90,
     playPause: 89,
@@ -2938,8 +2982,9 @@ export function activate(context: vscode.ExtensionContext): void {
     queue: 85,
     meter: 84,
     autoRead: 83,
-    listen: 82,
-    speed: 81,
+    agentReply: 82,
+    listen: 81,
+    speed: 80,
   };
 
   jumpBackBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.jumpBack);
@@ -2982,6 +3027,13 @@ export function activate(context: vscode.ExtensionContext): void {
   autoReadStatusBar.command = 'vartermCursor.toggleAutoRead';
   context.subscriptions.push(autoReadStatusBar);
   setAutoReadStatus(loadAutoReadEnabled(context, getSettings().autoReadAgentOutput));
+
+  agentReplyBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    ORDER.agentReply
+  );
+  agentReplyBar.command = 'vartermCursor.readLastAgentReply';
+  context.subscriptions.push(agentReplyBar);
 
   listenBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, ORDER.listen);
   listenBar.command = 'vartermCursor.readSelectionOrClipboard';
@@ -3067,7 +3119,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const text = readLastAgentText();
     if (!text) {
-      throw new Error('No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.');
+      throw new Error(
+        lastAgentReplyIsFromAnotherWindow()
+          ? 'The last agent reply belongs to another window. Varterm only replays replies from this one.'
+          : 'No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.'
+      );
     }
     await readTextAloud(context, text, 'agent reply', { replace: true });
   });

@@ -12,6 +12,11 @@ tsconfig.json
 *.pem
 *.key
 
+# Byte-compiling the hook locally leaves these behind, and stale bytecode of an
+# older script is not something to ship.
+**/__pycache__/**
+*.pyc
+
 assets/varterm-icons.svg
 scripts/build-icon-font.mjs
 scripts/preview-icon-font.html

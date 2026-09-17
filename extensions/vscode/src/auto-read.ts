@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { dropBelongsToRoots, newestOwnedDrop } from './agent-drop';
 
 export const AUTO_READ_KEY = 'vartermCursor.autoReadAgentOutput';
 const RELATIVE_HOOK_COMMAND = './hooks/varterm-autoread.py';
@@ -155,21 +156,96 @@ export async function installVartermAgentHook(extensionPath: string): Promise<vo
   await fs.promises.writeFile(hooksJsonPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
 }
 
-export function readLastAgentDrop(): { text: string; ts: number } | undefined {
+type ParsedDrop = { text: string; ts: number; cwd?: string; workspace?: string };
+
+function parseDrop(raw: string): ParsedDrop | undefined {
+  const parsed = JSON.parse(raw) as AgentDrop;
+  const text = stripForSpeech(parsed.text || '');
+  if (!text) {
+    return undefined;
+  }
+  return { text, ts: Number(parsed.ts) || 0, cwd: parsed.cwd, workspace: parsed.workspace };
+}
+
+export function readLastAgentDrop(): ParsedDrop | undefined {
   try {
-    const parsed = JSON.parse(fs.readFileSync(agentDropPath(), 'utf8')) as AgentDrop;
-    const text = stripForSpeech(parsed.text || '');
-    if (!text) {
-      return undefined;
-    }
-    return { text, ts: Number(parsed.ts) || 0 };
+    return parseDrop(fs.readFileSync(agentDropPath(), 'utf8'));
   } catch {
     return undefined;
   }
 }
 
+function agentRepliesDir(): string {
+  return path.join(os.homedir(), '.cursor', 'varterm-agent-replies');
+}
+
+/**
+ * The newest reply this window is entitled to.
+ *
+ * The hook keeps a copy per project because the shared file holds one reply for
+ * the whole machine: without the per-project copies, a window loses its own
+ * reply the moment any other window gets an answer. The shared file is still
+ * consulted last so a reply captured before this existed, or by a hook that has
+ * not been refreshed yet, stays replayable.
+ */
+function readOwnedAgentDrop(): ParsedDrop | undefined {
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(agentRepliesDir());
+  } catch {
+    names = [];
+  }
+  const drops: ParsedDrop[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) {
+      continue;
+    }
+    try {
+      const drop = parseDrop(fs.readFileSync(path.join(agentRepliesDir(), name), 'utf8'));
+      if (drop) {
+        drops.push(drop);
+      }
+    } catch {
+      // A half-written or hand-edited file should not hide the others.
+    }
+  }
+  const best = newestOwnedDrop(drops, windowWorkspaceRoots());
+  if (best) {
+    return best;
+  }
+  const shared = readLastAgentDrop();
+  return shared && windowOwnsDrop(shared) ? shared : undefined;
+}
+
 export function readLastAgentText(): string {
-  return readLastAgentDrop()?.text || '';
+  return readOwnedAgentDrop()?.text || '';
+}
+
+/** Distinguishes "nothing captured" from "captured, but not ours" when reporting. */
+export function lastAgentReplyIsFromAnotherWindow(): boolean {
+  const drop = readLastAgentDrop();
+  return Boolean(drop) && !windowOwnsDrop(drop!);
+}
+
+let ownedReplyCache: { at: number; value: boolean } | undefined;
+
+/** Called when the drop file changes, so the cache cannot outlive the answer. */
+export function forgetAgentReplyCache(): void {
+  ownedReplyCache = undefined;
+}
+
+/**
+ * Called from the status bar refresh, which fires on every playback state
+ * change, so the answer is cached briefly. It only changes when a reply lands.
+ */
+export function hasAgentReplyForThisWindow(): boolean {
+  const now = Date.now();
+  if (ownedReplyCache && now - ownedReplyCache.at < 2000) {
+    return ownedReplyCache.value;
+  }
+  const value = Boolean(readLastAgentText());
+  ownedReplyCache = { at: now, value };
+  return value;
 }
 
 /** Hook timestamps are Unix seconds; tolerate millisecond values from older files. */
@@ -214,14 +290,7 @@ function windowWorkspaceRoots(): string[] {
 }
 
 function windowOwnsDrop(drop: AgentDrop): boolean {
-  const roots = windowWorkspaceRoots();
-  const candidates = [drop.workspace, drop.cwd].filter((value): value is string => Boolean(value));
-  if (!roots.length || !candidates.length) {
-    return false;
-  }
-  return candidates.some((candidate) =>
-    roots.some((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`))
-  );
+  return dropBelongsToRoots(drop, windowWorkspaceRoots());
 }
 
 function claimDelayMs(drop: AgentDrop): number {

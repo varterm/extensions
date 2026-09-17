@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.65 - 2026-09-17
+
+### Added
+- A status bar button and `⌘⇧⌥A` / `Ctrl+Shift+Alt+A` to hear the last agent reply again, without copying anything. It shows only when there is a reply to repeat, and reuses cached audio when it can.
+
+### Changed
+- Only this window's agent replies are replayed, and each window now keeps its own. Replies used to go to one file shared by every window, so a window lost its reply as soon as any other window got an answer — and with several windows open the button was usually missing.
+
+### Fixed
+- Reading a selection that is only punctuation, a horizontal rule or emoji now says so instead of clearing the spinner with no sound and no reason. Auto-read stays quiet in the same case.
+- Expected refusals from the speech service — nothing speakable in the text, a voice that cannot read the script, too many requests — no longer file error reports. They are answers the user can act on, and they were burying the failures that are ours.
+
 ## 0.1.64 - 2026-09-14
 
 ### Fixed

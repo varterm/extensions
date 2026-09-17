@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.65 - 2026-09-17
+
+### Added
+- Hear the last agent reply again from a status bar button or `⌘⇧⌥A` / `Ctrl+Shift+Alt+A`. The command existed but was reachable only from the command palette, so the obvious move was to copy the reply and press the clipboard button — which silently does nothing, because that button ignores clipboard text it has already read and re-reading is exactly a repeat.
+
+### Changed
+- Replaying an agent reply is limited to replies from the window you are in, and every window now keeps its own. Replies previously went to a single file shared by the whole machine, which meant two things: the newest reply was often another project's, and replaying it read an answer to a question that window never asked; and a window lost its own reply the moment any other window got an answer, so with several windows open there was usually nothing to replay. The hook now keeps a copy per project and prunes them after thirty days. Auto-read's cross-window claiming is unchanged.
+
+### Fixed
+- Text that filters down to nothing speakable — a horizontal rule, a row of emoji, bare punctuation — now reports that instead of ending in silence with the spinner cleared and no explanation. Auto-read stays quiet, since a reply that reduces to nothing is not worth interrupting anyone over.
+- Deliberate refusals from the speech service (HTTP 422 and 429) stopped being filed as error reports. A voice that cannot read the script is a setting the user can change, not a defect, and these were crowding out real failures. Other 4xx still report: the extension builds its own payloads, so a 400 means this code sent a bad request.
+
 ## 0.1.64 - 2026-09-14
 
 ### Fixed

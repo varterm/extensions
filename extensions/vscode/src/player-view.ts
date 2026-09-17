@@ -6,6 +6,9 @@ export type PlayerHostMessage =
   | { type: 'loading'; label: string }
   | { type: 'ready'; label: string; tracks: Array<{ title: string; base64: string }>; voiceName: string; provider: 'edge' | 'premium' }
   | { type: 'error'; label: string; message: string }
+  // An expected outcome rather than a failure, so it clears the spinner without
+  // the error styling.
+  | { type: 'notice'; label: string; message: string }
   | { type: 'needText' };
 
 export class VartermPlayerViewProvider implements vscode.WebviewViewProvider {
@@ -279,6 +282,12 @@ export function buildPlayerHtml(): string {
           setReadyControls(false);
           labelMeta.textContent = data.label || 'Error';
           setStatus(data.message || 'Audio generation failed.', true);
+          return;
+        }
+        if (data.type === 'notice') {
+          setReadyControls(false);
+          labelMeta.textContent = data.label || '';
+          setStatus(data.message || '', false);
           return;
         }
         if (data.type === 'ready' && Array.isArray(data.tracks) && data.tracks.length) {
