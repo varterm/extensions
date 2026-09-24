@@ -1,21 +1,58 @@
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { dropBelongsToRoots, newestOwnedDrop } from './agent-drop';
+import {
+  autoReadClaimDelayMs,
+  chooseFocusedComposerId,
+  dropBelongsToRoots,
+  dropForConversation,
+  lastAssistantTextFromTranscript,
+  newestOwnedDrop,
+} from './agent-drop';
+
+const nodeRequire = createRequire(__filename);
 
 export const AUTO_READ_KEY = 'vartermCursor.autoReadAgentOutput';
 const RELATIVE_HOOK_COMMAND = './hooks/varterm-autoread.py';
 const STORE_NAME = 'varterm-autoread.json';
 
-type AgentDrop = { text?: string; ts?: number; cwd?: string; workspace?: string };
-type AutoReadStore = { enabled?: boolean; workspaces?: Record<string, boolean> };
+type AgentDrop = {
+  text?: string;
+  ts?: number;
+  cwd?: string;
+  workspace?: string;
+  conversationId?: string;
+};
+type AutoReadStore = {
+  enabled?: boolean;
+  agentsWindow?: boolean;
+  workspaces?: Record<string, boolean>;
+};
 
 /** This extension host / window only. Do not read settings here. */
 let thisWindowEnabled = false;
 
 export function getAutoReadEnabled(_context?: vscode.ExtensionContext): boolean {
   return thisWindowEnabled;
+}
+
+/** Cursor's Agents window (Glass) sets this on the extension API. Editor windows do not. */
+export function windowIsAgentsWindow(): boolean {
+  const cursorApi = (vscode as unknown as { cursor?: { isGlass?: boolean } }).cursor;
+  return cursorApi?.isGlass === true;
+}
+
+export function getAgentsWindowAutoRead(): boolean {
+  return readAutoReadStore().agentsWindow === true;
+}
+
+export function persistAgentsWindowAutoRead(enabled: boolean): void {
+  const store = readAutoReadStore();
+  store.agentsWindow = enabled;
+  writeAutoReadStore(store);
 }
 
 function autoReadStorePath(): string {
@@ -156,7 +193,13 @@ export async function installVartermAgentHook(extensionPath: string): Promise<vo
   await fs.promises.writeFile(hooksJsonPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
 }
 
-type ParsedDrop = { text: string; ts: number; cwd?: string; workspace?: string };
+type ParsedDrop = {
+  text: string;
+  ts: number;
+  cwd?: string;
+  workspace?: string;
+  conversationId?: string;
+};
 
 function parseDrop(raw: string): ParsedDrop | undefined {
   const parsed = JSON.parse(raw) as AgentDrop;
@@ -164,7 +207,14 @@ function parseDrop(raw: string): ParsedDrop | undefined {
   if (!text) {
     return undefined;
   }
-  return { text, ts: Number(parsed.ts) || 0, cwd: parsed.cwd, workspace: parsed.workspace };
+  const conversationId = typeof parsed.conversationId === 'string' ? parsed.conversationId.trim() : '';
+  return {
+    text,
+    ts: Number(parsed.ts) || 0,
+    cwd: parsed.cwd,
+    workspace: parsed.workspace,
+    conversationId: conversationId || undefined,
+  };
 }
 
 export function readLastAgentDrop(): ParsedDrop | undefined {
@@ -188,7 +238,7 @@ function agentRepliesDir(): string {
  * consulted last so a reply captured before this existed, or by a hook that has
  * not been refreshed yet, stays replayable.
  */
-function readOwnedAgentDrop(): ParsedDrop | undefined {
+function listReplyDrops(): ParsedDrop[] {
   let names: string[] = [];
   try {
     names = fs.readdirSync(agentRepliesDir());
@@ -209,7 +259,11 @@ function readOwnedAgentDrop(): ParsedDrop | undefined {
       // A half-written or hand-edited file should not hide the others.
     }
   }
-  const best = newestOwnedDrop(drops, windowWorkspaceRoots());
+  return drops;
+}
+
+function readOwnedAgentDrop(): ParsedDrop | undefined {
+  const best = newestOwnedDrop(listReplyDrops(), windowWorkspaceRoots());
   if (best) {
     return best;
   }
@@ -217,8 +271,313 @@ function readOwnedAgentDrop(): ParsedDrop | undefined {
   return shared && windowOwnsDrop(shared) ? shared : undefined;
 }
 
-export function readLastAgentText(): string {
+const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+let transcriptPathCache = new Map<string, string>();
+let transcriptTextCache: { id: string; mtime: number; text: string } | undefined;
+
+function cursorUserDir(): string {
+  const home = os.homedir();
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', 'Cursor', 'User');
+  }
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    return path.join(appData, 'Cursor', 'User');
+  }
+  return path.join(home, '.config', 'Cursor', 'User');
+}
+
+type SqlDb = {
+  prepare: (sql: string) => { get: (...args: unknown[]) => unknown };
+  close: () => void;
+};
+
+function openReadonlyDb(dbPath: string): SqlDb | undefined {
+  try {
+    const sqlite = nodeRequire('node:sqlite') as {
+      DatabaseSync: new (filename: string, options?: { readOnly?: boolean }) => SqlDb;
+    };
+    return new sqlite.DatabaseSync(dbPath, { readOnly: true });
+  } catch {
+    return undefined;
+  }
+}
+
+function sqliteCell(dbPath: string, sql: string, param?: string): string {
+  if (!fs.existsSync(dbPath)) {
+    return '';
+  }
+  const db = openReadonlyDb(dbPath);
+  if (db) {
+    try {
+      const row = param ? db.prepare(sql).get(param) : db.prepare(sql).get();
+      if (row && typeof row === 'object' && 'value' in row && typeof row.value === 'string') {
+        return row.value;
+      }
+    } catch {
+      return '';
+    } finally {
+      try {
+        db.close();
+      } catch {
+        // A locked Cursor database can fail on close after a successful read.
+      }
+    }
+    return '';
+  }
+  try {
+    if (param && !/^[A-Za-z0-9_./:-]+$/.test(param)) {
+      return '';
+    }
+    const bound = param ? sql.replace('?', `'${param.replace(/'/g, '')}'`) : sql;
+    const stdout = execFileSync('sqlite3', [dbPath, bound], {
+      encoding: 'utf8',
+      timeout: 1500,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return stdout.replace(/\n$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function parseStoredId(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('"') || trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return typeof parsed === 'string' ? parsed.trim() : '';
+    } catch {
+      return '';
+    }
+  }
+  return trimmed;
+}
+
+function fileUrlPath(url: string): string {
+  if (!url.startsWith('file://')) {
+    return '';
+  }
+  let pathname = decodeURIComponent(url.slice('file://'.length));
+  if (/^\/[A-Za-z]:\//.test(pathname)) {
+    pathname = pathname.slice(1);
+  }
+  return pathname;
+}
+
+const workspaceDbCache = new Map<string, string>();
+
+function workspaceDbForRoot(root: string): string {
+  const cached = workspaceDbCache.get(root);
+  if (cached) {
+    return cached;
+  }
+  const storage = path.join(cursorUserDir(), 'workspaceStorage');
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(storage);
+  } catch {
+    return '';
+  }
+  for (const name of names) {
+    const marker = path.join(storage, name, 'workspace.json');
+    let raw = '';
+    try {
+      raw = fs.readFileSync(marker, 'utf8');
+    } catch {
+      continue;
+    }
+    let folder = '';
+    try {
+      const parsed = JSON.parse(raw) as { folder?: unknown; workspace?: unknown };
+      folder = fileUrlPath(typeof parsed.folder === 'string' ? parsed.folder : '');
+      if (!folder && typeof parsed.workspace === 'string') {
+        folder = fileUrlPath(parsed.workspace);
+      }
+    } catch {
+      continue;
+    }
+    if (folder && (folder === root || root.startsWith(`${folder}${path.sep}`) || folder.startsWith(`${root}${path.sep}`))) {
+      const db = path.join(storage, name, 'state.vscdb');
+      workspaceDbCache.set(root, db);
+      return db;
+    }
+  }
+  workspaceDbCache.set(root, '');
+  return '';
+}
+
+function sidebarFocusedId(roots: string[]): string {
+  for (const root of roots) {
+    const db = workspaceDbForRoot(root);
+    if (!db) {
+      continue;
+    }
+    const raw = sqliteCell(db, "SELECT value FROM ItemTable WHERE key = 'composer.composerData'");
+    if (!raw) {
+      continue;
+    }
+    try {
+      const data = JSON.parse(raw) as { lastFocusedComposerIds?: unknown };
+      const ids = Array.isArray(data.lastFocusedComposerIds) ? data.lastFocusedComposerIds : [];
+      const first = ids.find((item) => typeof item === 'string' && item.trim());
+      if (typeof first === 'string') {
+        return first.trim();
+      }
+    } catch {
+      // The next folder may still have a readable list.
+    }
+  }
+  return '';
+}
+
+function glassSelectedId(): string {
+  const db = path.join(cursorUserDir(), 'globalStorage', 'state.vscdb');
+  return parseStoredId(
+    sqliteCell(db, "SELECT value FROM ItemTable WHERE key = 'cursor/glass.selectedAgent'")
+  );
+}
+
+function glassAgentOwned(id: string, roots: string[]): boolean {
+  if (!/^[A-Za-z0-9-]{8,80}$/.test(id)) {
+    return false;
+  }
+  const db = path.join(cursorUserDir(), 'globalStorage', 'state.vscdb');
+  const raw = sqliteCell(db, 'SELECT value FROM composerHeaders WHERE composerId = ?', id);
+  if (!raw) {
+    return false;
+  }
+  try {
+    const data = JSON.parse(raw) as {
+      workspaceIdentifier?: { uri?: { fsPath?: string; path?: string } };
+    };
+    const fsPath = data.workspaceIdentifier?.uri?.fsPath || data.workspaceIdentifier?.uri?.path || '';
+    return dropBelongsToRoots({ workspace: fsPath }, roots);
+  } catch {
+    return false;
+  }
+}
+
+export function focusedComposerId(): string {
+  return lookupFocusedComposerId() || '';
+}
+
+function lookupFocusedComposerId(): string | undefined {
+  const roots = windowWorkspaceRoots();
+  if (!roots.length) {
+    return undefined;
+  }
+  const glass = glassSelectedId();
+  return chooseFocusedComposerId({
+    windowFocused: vscode.window.state.focused,
+    sidebarFocusedId: sidebarFocusedId(roots),
+    glassSelectedId: glass,
+    glassOwned: Boolean(glass) && glassAgentOwned(glass, roots),
+  });
+}
+
+function findTranscriptPath(conversationId: string): string {
+  const cached = transcriptPathCache.get(conversationId);
+  if (cached) {
+    return cached;
+  }
+  const projects = path.join(os.homedir(), '.cursor', 'projects');
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(projects);
+  } catch {
+    return '';
+  }
+  for (const name of names) {
+    const file = path.join(projects, name, 'agent-transcripts', conversationId, `${conversationId}.jsonl`);
+    if (fs.existsSync(file)) {
+      transcriptPathCache.set(conversationId, file);
+      return file;
+    }
+  }
+  return '';
+}
+
+function readTranscriptReply(conversationId: string): string {
+  if (!/^[A-Za-z0-9-]{8,80}$/.test(conversationId)) {
+    return '';
+  }
+  const file = findTranscriptPath(conversationId);
+  if (!file) {
+    return '';
+  }
+  let mtime = 0;
+  try {
+    mtime = fs.statSync(file).mtimeMs;
+  } catch {
+    return '';
+  }
+  if (transcriptTextCache?.id === conversationId && transcriptTextCache.mtime === mtime) {
+    return transcriptTextCache.text;
+  }
+  let raw = '';
+  try {
+    const size = fs.statSync(file).size;
+    if (size <= TRANSCRIPT_TAIL_BYTES) {
+      raw = fs.readFileSync(file, 'utf8');
+    } else {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(TRANSCRIPT_TAIL_BYTES);
+        fs.readSync(fd, buf, 0, TRANSCRIPT_TAIL_BYTES, size - TRANSCRIPT_TAIL_BYTES);
+        raw = buf.toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  } catch {
+    return '';
+  }
+  const text = lastAssistantTextFromTranscript(raw);
+  transcriptTextCache = { id: conversationId, mtime, text };
+  return text;
+}
+
+function textForConversation(conversationId: string): string {
+  const captured = dropForConversation(listReplyDrops(), conversationId);
+  if (captured?.text) {
+    return captured.text;
+  }
+  return stripForSpeech(readTranscriptReply(conversationId));
+}
+
+/**
+ * The reply for the chat tab in front, not the newest reply in the project.
+ *
+ * With several sidebar tabs open, the newest file is whichever agent finished
+ * last — often a different tab, or text the user copied out of a plan. When
+ * no tab can be resolved, the newest reply this window owns is still the best
+ * guess.
+ */
+function readFocusedAgentText(): string {
+  const focused = lookupFocusedComposerId();
+  if (focused) {
+    return textForConversation(focused);
+  }
   return readOwnedAgentDrop()?.text || '';
+}
+
+export function readLastAgentText(): string {
+  return readFocusedAgentText();
+}
+
+export function agentReplyMissingMessage(): string {
+  const focused = lookupFocusedComposerId();
+  if (focused && !textForConversation(focused)) {
+    return 'This chat has no reply to read yet. Stay on this tab until the reply finishes.';
+  }
+  if (lastAgentReplyIsFromAnotherWindow()) {
+    return 'The last agent reply belongs to another window. Varterm only replays replies from this one.';
+  }
+  return 'No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.';
 }
 
 /** Distinguishes "nothing captured" from "captured, but not ours" when reporting. */
@@ -294,18 +653,13 @@ function windowOwnsDrop(drop: AgentDrop): boolean {
 }
 
 function claimDelayMs(drop: AgentDrop): number {
-  const owns = windowOwnsDrop(drop);
-  const focused = vscode.window.state.focused;
-  if (owns && focused) {
-    return 0;
-  }
-  if (owns) {
-    return 40;
-  }
-  if (focused) {
-    return 80;
-  }
-  return 280;
+  return autoReadClaimDelayMs({
+    isAgentsWindow: windowIsAgentsWindow(),
+    editorAutoRead: isAutoReadAllowed(),
+    agentsWindowAutoRead: getAgentsWindowAutoRead(),
+    ownsWorkspace: windowOwnsDrop(drop),
+    focused: vscode.window.state.focused,
+  });
 }
 
 function tryClaimAutoReadEvent(ts: number): boolean {
@@ -392,13 +746,15 @@ export function watchAgentDropFile(
         if (!text || ts <= lastTs || ts === inFlightTs || text.length < 8) {
           return;
         }
-        if (!isAutoReadAllowed()) {
-          log('Auto-read skipped: off');
+        const delay = claimDelayMs(parsed);
+        if (delay < 0) {
+          log(
+            `Auto-read skipped: agentsWindow=${windowIsAgentsWindow()} owns=${windowOwnsDrop(parsed)}`
+          );
           markHeardTs(ts);
           return;
         }
         inFlightTs = ts;
-        const delay = claimDelayMs(parsed);
         log(
           `Auto-read saw ${text.length} chars focused=${vscode.window.state.focused} owns=${windowOwnsDrop(parsed)} delay=${delay}ms`
         );

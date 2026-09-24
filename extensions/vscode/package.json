@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.66",
+  "version": "0.1.70",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -257,6 +257,11 @@
           "type": "boolean",
           "default": false,
           "description": "Last Auto-read choice, kept in sync with the status bar. Restart and updates read ~/.cursor/varterm-autoread.json, not this setting alone."
+        },
+        "vartermCursor.autoReadAgentsWindow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Read every finished reply from the Agents window. Cursor does not run this extension inside that window, so an editor plays the sound. Off leaves those replies quiet."
         },
         "vartermCursor.readAloudVoice": {
           "type": "string",

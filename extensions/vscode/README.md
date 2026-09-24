@@ -21,7 +21,8 @@ Select text **in a file** and press **Play**, or the selection / clipboard icon 
 - Right-click a selection → **Read Selection Aloud**.
 - The status bar icon turns into a selection mark while text is highlighted, and a clipboard when it will read what you copied.
 - Click the **speed** chip (`1×`) at the end of that row for a menu: 0.75×–2×, voice, and settings. In the voice list, click the speaker to preview; Enter uses that voice.
-- **Build plans.** Cursor’s plan view is not a text editor and often cannot copy. Press the selection button to hear the markdown file behind the plan (`~/.cursor/plans` or `.cursor/plans`). To hear a highlight only, open the plan with **Open With → Text Editor**. Chat and agent panels still need a copy, or Auto-read.
+- **Build plans.** Cursor’s plan view is not a text editor and often cannot copy. Press the selection button to hear the markdown file behind the plan (`~/.cursor/plans` or `.cursor/plans`). To hear a highlight only, open the plan with **Open With → Text Editor**.
+- **Agent chats.** Play and the reply button read the last reply in the sidebar tab you are on. In the Agents window the status bar has its own switch, **Agents window on**, which reads every finished reply in that window. An editor's Auto-read does not take a reply from another project. A copy from a plan is dropped once you leave that tab. To hear one bug out of a long reply, copy that text in the chat you are on. The status bar icon turns into a clipboard when the copy is seen.
 
 ## Agent Auto-read
 

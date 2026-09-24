@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import * as os from 'node:os';
@@ -33,20 +34,23 @@ import {
   watchListenQueue,
   type SharedQueueItem,
 } from './listen-queue';
-import { cacheIsCurrent } from './agent-drop';
 import { dominantScript, splitTextIntoChunks, voiceCannotSpeak } from './speech-text';
 import {
+  agentReplyMissingMessage,
+  focusedComposerId,
   forgetAgentReplyCache,
+  getAgentsWindowAutoRead,
   getAutoReadEnabled,
   hasAgentReplyForThisWindow,
   installVartermAgentHook,
   isAutoReadAllowed,
-  lastAgentReplyIsFromAnotherWindow,
   loadAutoReadEnabled,
+  persistAgentsWindowAutoRead,
   persistAutoReadEnabled,
   readLastAgentText,
   stripForSpeech,
   watchAgentDropFile,
+  windowIsAgentsWindow,
 } from './auto-read';
 import { captureException, flushTelemetry, initTelemetry } from './telemetry';
 
@@ -161,6 +165,7 @@ let jumpForwardBar: vscode.StatusBarItem | undefined;
 let replayBar: vscode.StatusBarItem | undefined;
 let agentReplyBar: vscode.StatusBarItem | undefined;
 let autoReadStatusBar: vscode.StatusBarItem | undefined;
+let agentsWindowBar: vscode.StatusBarItem | undefined;
 let listenBar: vscode.StatusBarItem | undefined;
 let queueBar: vscode.StatusBarItem | undefined;
 let speedBar: vscode.StatusBarItem | undefined;
@@ -304,9 +309,9 @@ function refreshTransport(): void {
       statusBar.tooltip = 'Play here — stops the Cursor window that is playing now';
     } else {
       statusBar.text = '$(play)';
-      statusBar.tooltip = editorHasSelection()
+      statusBar.tooltip = selectionToRead()
         ? 'Play the highlighted text'
-        : 'Play the highlight, last listen, or clipboard';
+        : 'Play the last reply in the chat you are on';
     }
     statusBar.command = 'vartermCursor.statusBarAction';
     statusBar.show();
@@ -365,9 +370,9 @@ function refreshAgentReplyBar(): void {
   if (!agentReplyBar) {
     return;
   }
-  if (lastAgentPlayback?.tracks.length || hasAgentReplyForThisWindow()) {
+  if (hasAgentReplyForThisWindow() || freshAgentPlayback()) {
     agentReplyBar.text = '$(comment-discussion)';
-    agentReplyBar.tooltip = `Read the last agent reply again (${getShortcutLabel('readLastAgentReply')})`;
+    agentReplyBar.tooltip = `Read the last reply in the chat you are on (${getShortcutLabel('readLastAgentReply')})`;
     agentReplyBar.show();
   } else {
     agentReplyBar.hide();
@@ -375,31 +380,38 @@ function refreshAgentReplyBar(): void {
 }
 
 let rememberedSelection = '';
+let rememberedUri = '';
 
 function currentEditorSelection(): string {
   const editor = vscode.window.activeTextEditor;
-  const fromActive = editor?.document.getText(editor.selection).trim() || '';
-  if (fromActive) {
-    return fromActive;
+  if (!editor || editor.selection.isEmpty) {
+    return '';
   }
-  for (const visible of vscode.window.visibleTextEditors) {
-    const text = visible.document.getText(visible.selection).trim();
-    if (text) {
-      return text;
-    }
-  }
-  return '';
+  return editor.document.getText(editor.selection).trim();
 }
 
 function rememberEditorSelection(): void {
-  const selected = currentEditorSelection();
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    return;
+  }
+  const selected = editor.document.getText(editor.selection).trim();
   if (selected) {
     rememberedSelection = selected;
+    rememberedUri = editor.document.uri.toString();
   }
 }
 
 function selectionToRead(): string {
-  return currentEditorSelection() || rememberedSelection;
+  const live = currentEditorSelection();
+  if (live) {
+    return live;
+  }
+  const editor = vscode.window.activeTextEditor;
+  if (editor && rememberedUri === editor.document.uri.toString() && rememberedSelection) {
+    return rememberedSelection;
+  }
+  return '';
 }
 
 function tabResourceUri(tab: vscode.Tab | undefined): vscode.Uri | undefined {
@@ -414,20 +426,6 @@ function tabResourceUri(tab: vscode.Tab | undefined): vscode.Uri | undefined {
     return input.modified;
   }
   return undefined;
-}
-
-function isNonTextEditorTab(tab: vscode.Tab | undefined): boolean {
-  if (!tab) {
-    return false;
-  }
-  if (
-    tab.input instanceof vscode.TabInputCustom ||
-    tab.input instanceof vscode.TabInputWebview ||
-    tab.input instanceof vscode.TabInputNotebook
-  ) {
-    return true;
-  }
-  return /plan/i.test(tab.label);
 }
 
 function isMarkdownUri(uri: vscode.Uri | undefined): boolean {
@@ -466,10 +464,6 @@ function tabLooksLikePlan(tab: vscode.Tab | undefined): boolean {
   );
 }
 
-function editorHasSelection(): boolean {
-  return Boolean(selectionToRead()) || isNonTextEditorTab(vscode.window.tabGroups.activeTabGroup.activeTab);
-}
-
 function stripPlanChrome(text: string): string {
   return text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
 }
@@ -478,23 +472,108 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const execFileAsync = promisify(execFile);
 let clipboardSnapshot = '';
+let freshClipboard = '';
+let clipboardChatId = '';
 
-async function snapshotClipboard(): Promise<void> {
+function activeTabKey(): string {
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (!tab) {
+    return '';
+  }
+  const uri = tabResourceUri(tab);
+  return uri ? uri.toString() : tab.label;
+}
+
+/**
+ * A copy belongs to the tab and chat that were in front when it was made.
+ * Switching away retires it, so a plan you copied earlier is not what plays.
+ * A copy made after the switch — text that is not the previous clipboard — stays.
+ */
+async function retireClipboardOnSwitch(): Promise<void> {
+  const id = `${focusedComposerId()}|${activeTabKey()}`;
+  if (clipboardChatId && id !== clipboardChatId) {
+    const text = (await readSystemClipboard()).replace(/\u0000/g, '').trim();
+    if (!text || text === freshClipboard.trim() || text === clipboardSnapshot.trim()) {
+      clipboardSnapshot = text;
+      freshClipboard = '';
+      refreshListenBar();
+    }
+  }
+  clipboardChatId = id;
+}
+
+async function readSystemClipboard(): Promise<string> {
   try {
-    clipboardSnapshot = await vscode.env.clipboard.readText();
+    if (process.platform === 'darwin') {
+      const { stdout } = await execFileAsync('/usr/bin/pbpaste', [], {
+        maxBuffer: 5_000_000,
+        timeout: 1500,
+      });
+      return stdout;
+    }
+    if (process.platform === 'win32') {
+      const { stdout } = await execFileAsync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', 'Get-Clipboard -Raw'],
+        { maxBuffer: 5_000_000, timeout: 2000 }
+      );
+      return stdout;
+    }
+    const { stdout } = await execFileAsync('xclip', ['-selection', 'clipboard', '-o'], {
+      maxBuffer: 5_000_000,
+      timeout: 1500,
+    });
+    return stdout;
   } catch {
-    clipboardSnapshot = '';
+    try {
+      return await vscode.env.clipboard.readText();
+    } catch {
+      return '';
+    }
   }
 }
 
-async function freshClipboardText(): Promise<string> {
-  const text = await vscode.env.clipboard.readText();
+async function snapshotClipboard(): Promise<void> {
+  try {
+    clipboardSnapshot = await readSystemClipboard();
+  } catch {
+    clipboardSnapshot = '';
+  }
+  freshClipboard = '';
+}
+
+async function noteClipboardChange(): Promise<void> {
+  if (freshClipboard) {
+    await retireClipboardOnSwitch();
+  }
+  const text = (await readSystemClipboard()).replace(/\u0000/g, '');
+  const next = text && text !== clipboardSnapshot ? text.trim() : '';
+  if (next === freshClipboard) {
+    return;
+  }
+  freshClipboard = next;
+  if (next) {
+    clipboardChatId = `${focusedComposerId()}|${activeTabKey()}`;
+  }
+  refreshListenBar();
+}
+
+async function consumeFreshClipboard(): Promise<string> {
+  const text = (await readSystemClipboard()).trim();
   if (text && text !== clipboardSnapshot) {
     clipboardSnapshot = text;
-    return text.trim();
+    freshClipboard = '';
+    refreshListenBar();
+    return text;
   }
+  freshClipboard = '';
   return '';
+}
+
+async function freshClipboardText(): Promise<string> {
+  return consumeFreshClipboard();
 }
 
 function currentEditorLine(): string {
@@ -518,7 +597,7 @@ async function copyFocusedHighlight(): Promise<string> {
       return '';
     }
     await delay(60);
-    const after = await vscode.env.clipboard.readText();
+        const after = await readSystemClipboard();
     if (!after || after === sentinel) {
       return '';
     }
@@ -627,46 +706,35 @@ async function textFromPlanDisk(tab: vscode.Tab | undefined): Promise<string> {
 }
 
 async function textFromPlanTab(): Promise<string> {
-  const tabs = [
-    vscode.window.tabGroups.activeTabGroup.activeTab,
-    ...vscode.window.tabGroups.all.map((group) => group.activeTab),
-  ].filter((tab): tab is vscode.Tab => {
-    if (!tab) {
-      return false;
-    }
-    return (
-      tabLooksLikePlan(tab) ||
-      isNonTextEditorTab(tab) ||
-      isMarkdownUri(tabResourceUri(tab))
-    );
-  });
-  if (!tabs.length) {
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (!tab || !tabLooksLikePlan(tab)) {
     return '';
   }
-  for (const tab of tabs) {
-    const uri = tabResourceUri(tab);
-    if (uri) {
-      const fromUri = await readUriText(uri);
-      if (fromUri) {
-        return fromUri;
-      }
-    }
-    const fromDisk = await textFromPlanDisk(tab);
-    if (fromDisk) {
-      return fromDisk;
+  const uri = tabResourceUri(tab);
+  if (uri) {
+    const fromUri = await readUriText(uri);
+    if (fromUri) {
+      return fromUri;
     }
   }
-  return '';
+  return textFromPlanDisk(tab);
 }
 
 async function resolveHighlightedText(): Promise<{ text: string; label: string } | undefined> {
+  await retireClipboardOnSwitch();
+  // A copy in the agent panel does not move the editor selection. It has to
+  // win over a plan that is still highlighted, or that plan is what plays.
+  const copied = await consumeFreshClipboard();
+  if (copied) {
+    return { text: copied, label: 'clipboard' };
+  }
   const selected = selectionToRead();
   if (selected) {
     return { text: selected, label: 'selection' };
   }
-  const copied = await copyFocusedHighlight();
-  if (copied) {
-    return { text: copied, label: 'selection' };
+  const highlight = await copyFocusedHighlight();
+  if (highlight) {
+    return { text: highlight, label: 'selection' };
   }
   const plan = await textFromPlanTab();
   if (plan) {
@@ -778,14 +846,17 @@ function refreshListenBar(): void {
     return;
   }
   rememberEditorSelection();
-  const selected = editorHasSelection();
+  const copied = Boolean(freshClipboard);
+  const selected = Boolean(selectionToRead());
   const planTab = tabLooksLikePlan(vscode.window.tabGroups.activeTabGroup.activeTab);
-  listenBar.text = selected || planTab ? '$(selection)' : '$(clippy)';
-  listenBar.tooltip = planTab
-    ? 'Read the highlighted plan text (or the whole plan if the highlight is in the plan view)'
-    : selected
-      ? 'Read the highlighted selection (nothing is copied)'
-      : 'Highlight text to read it, or click to read the clipboard';
+  listenBar.text = copied ? '$(clippy)' : selected || planTab ? '$(selection)' : '$(clippy)';
+  listenBar.tooltip = copied
+    ? 'Read the text you just copied'
+    : planTab
+      ? 'Read the highlighted plan text (or the whole plan if the highlight is in the plan view)'
+      : selected
+        ? 'Read the highlighted selection (nothing is copied)'
+        : 'Highlight text to read it, or copy text in the agent chat';
   listenBar.command = 'vartermCursor.readSelectionOrClipboard';
   listenBar.show();
 }
@@ -1216,11 +1287,34 @@ function setAutoReadStatus(enabled: boolean): void {
   if (!autoReadStatusBar) {
     return;
   }
+  if (windowIsAgentsWindow()) {
+    const on = getAgentsWindowAutoRead();
+    autoReadStatusBar.text = on ? '$(unmute) Agents window on' : '$(mute) Agents window off';
+    autoReadStatusBar.tooltip = on
+      ? 'On: every finished reply in the Agents window is read here. Click to turn off.'
+      : 'Off. Click to read every finished reply in the Agents window.';
+    autoReadStatusBar.show();
+    refreshAgentsWindowBar();
+    return;
+  }
   autoReadStatusBar.text = enabled ? '$(unmute) Auto-read on' : '$(mute) Auto-read off';
   autoReadStatusBar.tooltip = enabled
     ? 'On in this window: when an assistant reply finishes, Varterm reads it. Click to turn off.'
     : 'Off in this window. Click to auto-read assistant replies here when they finish.';
   autoReadStatusBar.show();
+  refreshAgentsWindowBar();
+}
+
+function refreshAgentsWindowBar(): void {
+  if (!agentsWindowBar) {
+    return;
+  }
+  const on = getAgentsWindowAutoRead();
+  agentsWindowBar.text = on ? '$(unmute) Agents window' : '$(mute) Agents window';
+  agentsWindowBar.tooltip = on
+    ? 'On. Cursor does not run Varterm inside the Agents window, so this editor reads every finished reply from it. Click to turn off.'
+    : 'Off. Click to read every finished reply from the Agents window. Cursor does not run extensions there, so the sound plays in this editor.';
+  agentsWindowBar.show();
 }
 
 async function tryUpdateUserSetting(key: string, value: unknown): Promise<void> {
@@ -1270,10 +1364,6 @@ async function setAutoReadEnabled(
   autoReadWatcher = watchAgentDropFile((text, markHeard) => {
     forgetAgentReplyCache();
     refreshAgentReplyBar();
-    if (!isAutoReadAllowed()) {
-      markHeard();
-      return;
-    }
     return readTextAloud(context, text, 'agent reply', {
       replace: true,
       onStarted: markHeard,
@@ -1291,7 +1381,64 @@ async function setAutoReadEnabled(
   logInfo('Auto-read on');
 }
 
+async function setAgentsWindowReading(context: vscode.ExtensionContext, enabled: boolean): Promise<void> {
+  persistAgentsWindowAutoRead(enabled);
+  try {
+    await vscode.workspace
+      .getConfiguration('vartermCursor')
+      .update('autoReadAgentsWindow', enabled, vscode.ConfigurationTarget.Global);
+  } catch {
+    // The file is what the hook and the other windows read.
+  }
+  setAutoReadStatus(getAutoReadEnabled(context));
+  autoReadWatcher?.dispose();
+  autoReadWatcher = undefined;
+  try {
+    await installVartermAgentHook(context.extensionPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logInfo(`Hook install skipped: ${message}`);
+  }
+  if (!enabled) {
+    logInfo('Agents window reading off');
+    if (!windowIsAgentsWindow() && getAutoReadEnabled(context)) {
+      await setAutoReadEnabled(context, true, { persistSettings: false });
+      return;
+    }
+    stopAutoReadInThisWindow();
+    return;
+  }
+  autoReadWatcher = watchAgentDropFile((text, markHeard) => {
+    forgetAgentReplyCache();
+    refreshAgentReplyBar();
+    return readTextAloud(context, text, 'agent reply', {
+      replace: true,
+      onStarted: markHeard,
+      autoRead: true,
+    }).catch((error) => {
+      if (isReadCancelled(error)) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
+      captureException(error, { area: 'auto-read', label: 'agent reply' });
+      throw error;
+    });
+  }, logInfo);
+  logInfo('Agents window reading on');
+}
+
 async function toggleAutoRead(context: vscode.ExtensionContext): Promise<void> {
+  if (windowIsAgentsWindow()) {
+    const next = !getAgentsWindowAutoRead();
+    await setAgentsWindowReading(context, next);
+    vscode.window.showInformationMessage(
+      next
+        ? 'Agents window reading is on. Every finished reply in this window will play here.'
+        : 'Agents window reading is off. Replies in this window stay quiet.'
+    );
+    return;
+  }
   const next = !getAutoReadEnabled(context);
   await setAutoReadEnabled(context, next);
   vscode.window.showInformationMessage(
@@ -2516,7 +2663,13 @@ function freshAgentPlayback(): { tracks: AudioTrack[]; label: string; text: stri
   if (!lastAgentPlayback?.tracks.length) {
     return undefined;
   }
-  return cacheIsCurrent(lastAgentPlayback.text, readLastAgentText()) ? lastAgentPlayback : undefined;
+  const newest = readLastAgentText();
+  // An empty lookup used to count as "still current", so the button replayed
+  // the previous listen when this chat had no reply of its own.
+  if (!newest || lastAgentPlayback.text !== newest) {
+    return undefined;
+  }
+  return lastAgentPlayback;
 }
 
 async function readTextAloud(
@@ -2532,7 +2685,8 @@ async function readTextAloud(
   }
 ): Promise<void> {
   logInfo(`readTextAloud start: label=${label}, chars=${text.length}`);
-  if (options?.autoRead && !isAutoReadAllowed()) {
+  const agentsWindowReading = getAgentsWindowAutoRead();
+  if (options?.autoRead && !isAutoReadAllowed() && !agentsWindowReading) {
     logInfo('readTextAloud skipped: Auto-read is off');
     options.onStarted?.();
     return;
@@ -3001,18 +3155,11 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  const highlighted = await resolveHighlightedText();
-  if (highlighted) {
-    await readTextAloud(context, highlighted.text, highlighted.label, { replace: true });
-    return;
-  }
+  await retireClipboardOnSwitch();
 
-  if (await replayWithCurrentSettings(context)) {
-    return;
-  }
-
-  if (latestPlayback?.tracks.length) {
-    await playTracksInCursor(context, latestPlayback.tracks);
+  const selected = selectionToRead();
+  if (selected) {
+    await readTextAloud(context, selected, 'selection', { replace: true });
     return;
   }
 
@@ -3029,10 +3176,13 @@ async function handleStatusBarAction(context: vscode.ExtensionContext): Promise<
     return;
   }
 
-  const clipboard = await freshClipboardText();
-  if (clipboard) {
-    await readTextAloud(context, clipboard, 'clipboard', { replace: true });
+  const plan = await textFromPlanTab();
+  if (plan) {
+    await readTextAloud(context, plan, 'plan', { replace: true });
+    return;
   }
+
+  throw new Error(agentReplyMissingMessage());
 }
 
 async function maybeShowAutoReadTip(context: vscode.ExtensionContext): Promise<void> {
@@ -3065,7 +3215,7 @@ async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> 
     return;
   }
 
-  const clipboard = (await vscode.env.clipboard.readText()).trim();
+  const clipboard = (await readSystemClipboard()).trim();
   if (clipboard) {
     await readTextAloud(context, clipboard, 'clipboard', { replace: true });
     return;
@@ -3075,8 +3225,11 @@ async function readEditorAloud(context: vscode.ExtensionContext): Promise<void> 
 }
 
 async function readClipboardAloud(context: vscode.ExtensionContext): Promise<void> {
-  const clipboard = (await vscode.env.clipboard.readText()).trim();
+  const clipboard = (await readSystemClipboard()).trim();
   if (clipboard) {
+    clipboardSnapshot = clipboard;
+    freshClipboard = '';
+    refreshListenBar();
     await readTextAloud(context, clipboard, 'clipboard', { replace: true });
     return;
   }
@@ -3092,7 +3245,7 @@ async function readSelectionAloud(context: vscode.ExtensionContext): Promise<voi
   }
 
   vscode.window.showWarningMessage(
-    'Highlight text in a file or a plan, then press the selection button. Chat highlights still need a copy first.'
+    'Highlight text in a file or a plan, or copy text in the agent chat, then press the selection button.'
   );
 }
 
@@ -3110,7 +3263,7 @@ async function readSelectionOrClipboard(context: vscode.ExtensionContext): Promi
   }
 
   vscode.window.showWarningMessage(
-    'Could not read that highlight. Copy it first (Cmd+C / Ctrl+C), then press the button again. Old clipboard text is ignored. Copy a single space if you want to clear it.'
+    'Could not read that highlight. Copy it in the agent chat (Cmd+C / Ctrl+C), then press the button again. The icon switches to a clipboard when the copy is seen. Older clipboard text is ignored.'
   );
 }
 
@@ -3175,6 +3328,7 @@ export function activate(context: vscode.ExtensionContext): void {
     queue: 85,
     meter: 84,
     autoRead: 83,
+    agentsWindow: 82.5,
     agentReply: 82,
     listen: 81,
     speed: 80,
@@ -3219,6 +3373,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   autoReadStatusBar.command = 'vartermCursor.toggleAutoRead';
   context.subscriptions.push(autoReadStatusBar);
+  agentsWindowBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    ORDER.agentsWindow
+  );
+  agentsWindowBar.command = 'vartermCursor.toggleAgentsWindowReading';
+  context.subscriptions.push(agentsWindowBar);
   setAutoReadStatus(loadAutoReadEnabled(context, getSettings().autoReadAgentOutput));
 
   agentReplyBar = vscode.window.createStatusBarItem(
@@ -3236,6 +3396,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const text = event.textEditor.document.getText(event.textEditor.selection).trim();
       if (text) {
         rememberedSelection = text;
+        rememberedUri = event.textEditor.document.uri.toString();
       }
       refreshListenBar();
     }),
@@ -3307,6 +3468,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register('vartermCursor.readSelectionOrClipboard', () => readSelectionOrClipboard(context));
   register('vartermCursor.readErrorsAloud', () => readErrorsAloud(context));
   register('vartermCursor.readLastAgentReply', async () => {
+    await retireClipboardOnSwitch();
     const cached = freshAgentPlayback();
     if (cached) {
       latestPlayback = cached;
@@ -3315,11 +3477,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const text = readLastAgentText();
     if (!text) {
-      throw new Error(
-        lastAgentReplyIsFromAnotherWindow()
-          ? 'The last agent reply belongs to another window. Varterm only replays replies from this one.'
-          : 'No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.'
-      );
+      throw new Error(agentReplyMissingMessage());
     }
     await readTextAloud(context, text, 'agent reply', { replace: true });
   });
@@ -3364,13 +3522,24 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register('vartermCursor.statusBarAction', () => handleStatusBarAction(context));
   register('vartermCursor.toggleAutoRead', () => toggleAutoRead(context));
+  register('vartermCursor.toggleAgentsWindowReading', () => setAgentsWindowReading(context, !getAgentsWindowAutoRead()));
   register('vartermCursor.saveLastAudio', () => saveLatestAudio());
 
-  void snapshotClipboard();
+  void snapshotClipboard().then(() => {
+    const timer = setInterval(() => {
+      if (!vscode.window.state.focused) {
+        return;
+      }
+      void noteClipboardChange();
+    }, 800);
+    context.subscriptions.push({ dispose: () => clearInterval(timer) });
+  });
   void pruneAudioCache(context);
   void maybeShowShortcutsTip(context);
   void maybeShowAutoReadTip(context);
-  if (getAutoReadEnabled(context)) {
+  if (getAgentsWindowAutoRead() || windowIsAgentsWindow()) {
+    void setAgentsWindowReading(context, getAgentsWindowAutoRead());
+  } else if (getAutoReadEnabled(context)) {
     void setAutoReadEnabled(context, true, { persistSettings: false });
   }
 }

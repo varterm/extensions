@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cacheIsCurrent, dropBelongsToRoots, newestOwnedDrop } from '../dist/agent-drop.js';
+import {
+  autoReadClaimDelayMs,
+  cacheIsCurrent,
+  chooseFocusedComposerId,
+  dropBelongsToRoots,
+  dropForConversation,
+  lastAssistantTextFromTranscript,
+  newestOwnedDrop,
+} from '../dist/agent-drop.js';
 
 const SEP = '/';
 const ROOT = '/Users/dev/src/varterm';
@@ -110,4 +118,144 @@ test('with nothing on disk the cache is the only answer there is', () => {
 
 test('an empty cache never looks current against a real reply', () => {
   assert.equal(cacheIsCurrent('', 'reply two'), false);
+});
+
+test('the front window reads the Agents window selection', () => {
+  assert.equal(
+    chooseFocusedComposerId({
+      windowFocused: true,
+      sidebarFocusedId: 'sidebar-tab',
+      glassSelectedId: 'agents-window',
+      glassOwned: true,
+    }),
+    'agents-window'
+  );
+});
+
+test('a background window keeps its own sidebar tab', () => {
+  assert.equal(
+    chooseFocusedComposerId({
+      windowFocused: false,
+      sidebarFocusedId: 'sidebar-tab',
+      glassSelectedId: 'agents-window',
+      glassOwned: true,
+    }),
+    'sidebar-tab'
+  );
+});
+
+test('an Agents window selection from another project is ignored', () => {
+  assert.equal(
+    chooseFocusedComposerId({
+      windowFocused: true,
+      sidebarFocusedId: 'sidebar-tab',
+      glassSelectedId: 'other-project',
+      glassOwned: false,
+    }),
+    'sidebar-tab'
+  );
+});
+
+test('with no sidebar record the front window still has its chat', () => {
+  assert.equal(
+    chooseFocusedComposerId({
+      windowFocused: true,
+      glassSelectedId: 'this-tab',
+      glassOwned: true,
+    }),
+    'this-tab'
+  );
+});
+
+test('a reply is chosen by chat id, not by which file is newest', () => {
+  const older = { conversationId: 'tab-a', ts: 1, text: 'first tab' };
+  const newer = { conversationId: 'tab-b', ts: 9, text: 'other tab' };
+  assert.equal(dropForConversation([newer, older], 'tab-a')?.text, 'first tab');
+  assert.equal(dropForConversation([newer, older], 'missing'), undefined);
+});
+
+test('the Agents window switch reads every reply there', () => {
+  assert.equal(
+    autoReadClaimDelayMs({
+      isAgentsWindow: true,
+      editorAutoRead: false,
+      agentsWindowAutoRead: true,
+      ownsWorkspace: false,
+      focused: true,
+    }),
+    0
+  );
+});
+
+test('the Agents window stays quiet when its switch is off', () => {
+  assert.equal(
+    autoReadClaimDelayMs({
+      isAgentsWindow: true,
+      editorAutoRead: true,
+      agentsWindowAutoRead: false,
+      ownsWorkspace: true,
+      focused: true,
+    }),
+    -1
+  );
+});
+
+test('an editor does not read a reply from another project', () => {
+  assert.equal(
+    autoReadClaimDelayMs({
+      isAgentsWindow: false,
+      editorAutoRead: true,
+      agentsWindowAutoRead: false,
+      ownsWorkspace: false,
+      focused: true,
+    }),
+    -1
+  );
+});
+
+test('an editor reads its own project', () => {
+  assert.equal(
+    autoReadClaimDelayMs({
+      isAgentsWindow: false,
+      editorAutoRead: true,
+      agentsWindowAutoRead: false,
+      ownsWorkspace: true,
+      focused: true,
+    }),
+    0
+  );
+});
+
+test('an editor reads every Agents window reply when that switch is on', () => {
+  assert.equal(
+    autoReadClaimDelayMs({
+      isAgentsWindow: false,
+      editorAutoRead: false,
+      agentsWindowAutoRead: true,
+      ownsWorkspace: false,
+      focused: false,
+    }),
+    80
+  );
+  assert.equal(
+    autoReadClaimDelayMs({
+      isAgentsWindow: false,
+      editorAutoRead: true,
+      agentsWindowAutoRead: true,
+      ownsWorkspace: true,
+      focused: true,
+    }),
+    40
+  );
+});
+
+test('the transcript reader keeps the last assistant message with text', () => {
+  const jsonl = [
+    '{"role":"user","message":{"content":[{"type":"text","text":"look at the bugs"}]}}',
+    '{"role":"assistant","message":{"content":[{"type":"text","text":"First bug is the clipboard."}]}}',
+    'not json',
+    '{"role":"assistant","message":{"content":[{"type":"tool_use","name":"read"}]}}',
+    '{"role":"assistant","message":{"content":[{"type":"text","text":"Second bug is the wrong tab."}]}}',
+  ].join('\n');
+  assert.equal(lastAssistantTextFromTranscript(jsonl), 'Second bug is the wrong tab.');
 });

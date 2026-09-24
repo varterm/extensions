@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.70 - 2026-09-22
+
+### Fixed
+- **The Agents window cannot run Varterm.** Cursor only starts a fixed list of extensions there, and this one is not on it, so the status bar never appears in that window. An editor now has an Agents window switch. On, that editor reads every finished reply from the Agents window.
+
+## 0.1.69 - 2026-09-21
+
+### Added
+- **Agents window on/off.** The status bar in the Agents window reads every finished reply in that window, or stays quiet. An editor's Auto-read no longer picks up a reply from another project just because that editor is in front.
+
+## 0.1.68 - 2026-09-21
+
+### Fixed
+- **Leaving a plan no longer keeps that copy in front of the chat.** Play and the last-reply button were still speaking markdown copied from a plan after that plan tab was no longer in front. Both now read the chat you are on. The copy is dropped when you switch tabs; copy again on the chat you want, then use the clipboard icon, to hear one part of a reply.
+
+## 0.1.67 - 2026-09-21
+
+### Fixed
+- **Last reply follows the chat you are on.** With several sidebar tabs open, replay was the newest reply in the project, so a different tab — or text copied out of a plan — is what played. It now reads the tab in front. The Agents window uses the same rule.
+- **A copy in the agent chat shows up.** Copies there were invisible to the editor clipboard, so the selection button kept playing an older plan highlight. A new copy switches the status icon to a clipboard and is what plays. A plan file is read only when that plan is the tab in front.
+
 ## 0.1.66 - 2026-09-17
 
 ### Added
