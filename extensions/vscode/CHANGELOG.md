@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.72 - 2026-10-06
+
+### Fixed
+- **Long reads no longer die writing an MP3.** Selection and Auto-read wrote each part into Cursor's `vscode-userdata` globalStorage. That provider fails mid-read with `Unable to write file … (Unknown …)`, especially around later parts of a long selection, and every window shares the same folder. Playback files now go to the OS temp directory through Node's filesystem, and prune leaves files that are still playing alone.
+- **Agents window reading is in the Command Palette.** `Varterm: Toggle Agents Window Reading` was wired up but never listed, so it was only reachable from the status bar.
+
+### Removed
+- Three commands that were listed but did nothing: `Sign In to Account`, `Sign Out of Account`, `Save Last Playback to Library`. Picking one gave "command not found".
+- Five settings left over from a document-ingest feature that has no command behind it: `chunkSize`, `chunkOverlap`, `askMaxChunks`, `askMaxContextChars`, `autoReadAnswersAloud`. Parts are sized for speech at 450 characters and are not configurable. Any value you had set is ignored and can be deleted from `settings.json`.
+
+### Changed
+- The listing now describes what ships: one shared reading queue across windows (not "only the focused window speaks"), markdown stripped before speech, the Agents window switch, and ElevenLabs with your own key as available today.
+
+## 0.1.71 - 2026-10-02
+
+### Fixed
+- **Windows playback plays.** The player added for `Background playback currently uses macOS afplay` started Windows Media Player and then slept until the clip's duration was known. That object only fills the duration in while its message loop is running, so the wait always hit the 8 second timeout and nothing was heard. The loop now runs until the clip ends. A player failure includes the reason instead of only an exit code.
+
 ## 0.1.70 - 2026-09-22
 
 ### Fixed

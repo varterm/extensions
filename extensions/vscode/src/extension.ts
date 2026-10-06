@@ -1,15 +1,27 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { createTtsHttpClient } from '@varterm/tts-client';
 import {
+  deleteFiles,
+  ensureDir,
+  filesToPrune,
+  legacyAudioDir,
+  listMp3Files,
+  playbackAudioDir,
+  playbackAudioRoot,
+  writeAudioBytes,
+} from './audio-cache';
+import {
   findLinuxPlayer,
   LINUX_PLAYERS,
   NO_PLAYER_MESSAGE,
+  windowsPlayArguments,
+  windowsPowershell,
   type HostPlayer,
 } from './host-player';
 import { sliceMp3FromMs } from './mp3';
@@ -57,12 +69,9 @@ import { captureException, flushTelemetry, initTelemetry } from './telemetry';
 const SECRET_TOKEN_KEY = 'vartermCursor.apiToken';
 const SECRET_ELEVENLABS_KEY = 'vartermCursor.elevenLabsApiKey';
 const BASE_URL_KEY = 'vartermCursor.baseUrl';
-const SESSION_KEY = 'vartermCursor.latestSession';
 const VOICE_ID_KEY = 'vartermCursor.voiceId';
 const VOICE_NAME_KEY = 'vartermCursor.voiceName';
 const VOICE_PROVIDER_KEY = 'vartermCursor.voiceProvider';
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const MAX_TOTAL_FILES = 20;
 const DEFAULT_MAX_TOTAL_TEXT_CHARS = 1_000_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_REQUEST_RETRIES = 2;
@@ -81,39 +90,10 @@ const SHIPPED_SHORTCUTS = {
   readLastAgentReply: { mac: 'cmd+shift+alt+a', win: 'ctrl+shift+alt+a' },
 } as const;
 
-type IngestResult = {
-  sessionId: string;
-  expiresInMs: number;
-  documentCount: number;
-  chunkCount: number;
-  totalChars: number;
-  truncated: boolean;
-  documents: Array<{
-    path: string;
-    characters?: number;
-    chunks?: number;
-    skipped?: boolean;
-    reason?: string;
-  }>;
-};
-
-type AskSource = {
-  path: string;
-  chunk: number;
-  score: number;
-  startChar?: number;
-  endChar?: number;
-};
-
 type ExtensionSettings = {
   requestTimeoutMs: number;
   requestRetries: number;
   maxTotalTextChars: number;
-  chunkSize: number;
-  chunkOverlap: number;
-  askMaxChunks: number;
-  askMaxContextChars: number;
-  autoReadAnswersAloud: boolean;
   autoReadAgentOutput: boolean;
   readAloudVoice: string;
   readAloudRate: number;
@@ -143,6 +123,9 @@ let previewProcess: ChildProcess | undefined;
 let previewGeneration = 0;
 let previewCts: vscode.CancellationTokenSource | undefined;
 const livePlayers = new Set<ChildProcess>();
+// Last error line from a player process. stdio used to be ignored, so a Windows
+// failure arrived as "exited with code 1" and the reason was thrown away.
+const playerStderr = new WeakMap<ChildProcess, string>();
 const stoppedPlayers = new WeakSet<ChildProcess>();
 let playbackState: 'idle' | 'generating' | 'playing' | 'paused' = 'idle';
 let playbackFiles: string[] = [];
@@ -1580,21 +1563,20 @@ async function playTracksInCursor(
   stopHostPlayback();
   expectedTrackCount = tracks.length;
   waitingForChunk = undefined;
-  const outputDir = audioCacheDir(context);
-  await vscode.workspace.fs.createDirectory(outputDir);
+  const outputDir = await ensureDir(playbackAudioDir());
 
   const files: string[] = [];
   const stamp = Date.now();
   for (let i = 0; i < tracks.length; i += 1) {
-    const uri = vscode.Uri.joinPath(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
-    await vscode.workspace.fs.writeFile(uri, Buffer.from(tracks[i].base64, 'base64'));
-    files.push(uri.fsPath);
+    const filePath = path.join(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
+    await writeAudioBytes(filePath, Buffer.from(tracks[i].base64, 'base64'));
+    files.push(filePath);
   }
 
   for (const filePath of files) {
-    const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
-    logInfo(`Audio file ${filePath} size=${stat.size}`);
-    if (stat.size < 100) {
+    const info = await stat(filePath);
+    logInfo(`Audio file ${filePath} size=${info.size}`);
+    if (info.size < 100) {
       throw new Error('Generated audio file was empty. Try again.');
     }
   }
@@ -1673,38 +1655,43 @@ function hostPlayerName(): string {
   return linuxPlayer()?.cmd || 'no audio player';
 }
 
+function windowsPlayScript(): string {
+  return path.join(__dirname, '..', 'scripts', 'play-mp3.ps1');
+}
+
+function rememberPlayerStderr(child: ChildProcess): void {
+  if (!child.stderr) {
+    return;
+  }
+  let text = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    text = `${text}${chunk}`.replace(/\s+/g, ' ').trim().slice(-500);
+    playerStderr.set(child, text);
+  });
+}
+
 function spawnHostPlayer(filePath: string): ChildProcess {
+  let child: ChildProcess;
   if (process.platform === 'darwin') {
-    return spawn('/usr/bin/afplay', [filePath], {
-      stdio: 'ignore',
+    child = spawn('/usr/bin/afplay', [filePath], {
+      stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
     });
+  } else if (process.platform === 'win32') {
+    child = spawn(windowsPowershell(), windowsPlayArguments(windowsPlayScript(), filePath), {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+  } else {
+    const player = linuxPlayer();
+    if (!player) {
+      throw new Error(NO_PLAYER_MESSAGE);
+    }
+    child = spawn(player.cmd, player.args(filePath), { stdio: ['ignore', 'ignore', 'pipe'] });
   }
-  if (process.platform === 'win32') {
-    const script = path.join(__dirname, '..', 'scripts', 'play-mp3.ps1');
-    return spawn(
-      'powershell.exe',
-      [
-        '-STA',
-        '-NoProfile',
-        '-NonInteractive',
-        '-WindowStyle',
-        'Hidden',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        script,
-        '-Path',
-        filePath,
-      ],
-      { stdio: 'ignore', windowsHide: true }
-    );
-  }
-  const player = linuxPlayer();
-  if (!player) {
-    throw new Error(NO_PLAYER_MESSAGE);
-  }
-  return spawn(player.cmd, player.args(filePath), { stdio: 'ignore' });
+  rememberPlayerStderr(child);
+  return child;
 }
 
 function startChunk(index: number, generation: number, offsetMs = 0): void {
@@ -1769,8 +1756,13 @@ function startChunk(index: number, generation: number, offsetMs = 0): void {
     }
     playbackProcess = undefined;
     if (code && code !== 0) {
+      const detail = playerStderr.get(child);
       playReject?.(
-        new Error(`${hostPlayerName()} exited with code ${code}${signal ? ` (${signal})` : ''}`)
+        new Error(
+          `${hostPlayerName()} exited with code ${code}${signal ? ` (${signal})` : ''}${
+            detail ? `: ${detail}` : ''
+          }`
+        )
       );
       playResolve = undefined;
       playReject = undefined;
@@ -1862,19 +1854,11 @@ function getBaseUrl(context: vscode.ExtensionContext): string {
 
 function getSettings(): ExtensionSettings {
   const config = vscode.workspace.getConfiguration('vartermCursor');
-  const chunkSize = config.get<number>('chunkSize', 1800);
-  const overlapRaw = config.get<number>('chunkOverlap', 250);
-  const overlap = Math.min(Math.max(overlapRaw, 0), Math.floor(chunkSize / 2));
 
   return {
     requestTimeoutMs: config.get<number>('requestTimeoutMs', DEFAULT_REQUEST_TIMEOUT_MS),
     requestRetries: config.get<number>('requestRetries', DEFAULT_REQUEST_RETRIES),
     maxTotalTextChars: config.get<number>('maxTotalTextChars', DEFAULT_MAX_TOTAL_TEXT_CHARS),
-    chunkSize,
-    chunkOverlap: overlap,
-    askMaxChunks: config.get<number>('askMaxChunks', 8),
-    askMaxContextChars: config.get<number>('askMaxContextChars', 15000),
-    autoReadAnswersAloud: config.get<boolean>('autoReadAnswersAloud', false),
     autoReadAgentOutput: config.get<boolean>('autoReadAgentOutput', false),
     readAloudVoice: config.get<string>('readAloudVoice', 'en-US-AriaNeural'),
     readAloudRate: config.get<number>('readAloudRate', 1),
@@ -1933,16 +1917,6 @@ function createHttpClient(context: vscode.ExtensionContext, options?: { retries?
     timeoutMs: options?.timeoutMs ?? settings.requestTimeoutMs,
     getHeaders: (includeJsonContentType) => getRequestHeaders(context, includeJsonContentType),
   });
-}
-
-async function postJson<T>(
-  context: vscode.ExtensionContext,
-  path: string,
-  payload: unknown,
-  options?: { retries?: number; timeoutMs?: number; cancellationToken?: vscode.CancellationToken }
-): Promise<T> {
-  const client = createHttpClient(context, options);
-  return client.postJson<T>(path, payload, options);
 }
 
 async function postBinary(
@@ -2150,14 +2124,13 @@ async function playPreviewBytes(
   if (generation !== previewGeneration || audioBytes.byteLength < 100) {
     return;
   }
-  const outputDir = audioCacheDir(context);
-  await vscode.workspace.fs.createDirectory(outputDir);
-  const uri = vscode.Uri.joinPath(outputDir, `varterm-preview.mp3`);
-  await vscode.workspace.fs.writeFile(uri, Buffer.from(audioBytes));
+  const outputDir = await ensureDir(playbackAudioDir());
+  const filePath = path.join(outputDir, 'varterm-preview.mp3');
+  await writeAudioBytes(filePath, Buffer.from(audioBytes));
   if (generation !== previewGeneration) {
     return;
   }
-  startPreviewAfplay(uri.fsPath, generation);
+  startPreviewAfplay(filePath, generation);
 }
 
 async function previewVoice(context: vscode.ExtensionContext, voice: VoiceOption): Promise<void> {
@@ -2277,330 +2250,6 @@ async function selectReadAloudVoice(context: vscode.ExtensionContext): Promise<v
     });
     picker.show();
   });
-}
-
-function looksLikeBinary(bytes: Uint8Array): boolean {
-  const sample = bytes.slice(0, 2000);
-  let suspicious = 0;
-  for (const byte of sample) {
-    if (byte === 0) {
-      return true;
-    }
-    if (byte < 7 || (byte > 13 && byte < 32)) {
-      suspicious += 1;
-    }
-  }
-  return suspicious > sample.length * 0.2;
-}
-
-async function ingestDocuments(context: vscode.ExtensionContext): Promise<void> {
-  const settings = getSettings();
-  const uris = await vscode.window.showOpenDialog({
-    canSelectMany: true,
-    canSelectFolders: false,
-    canSelectFiles: true,
-    openLabel: 'Ingest with Varterm',
-    filters: {
-      'Text and code': [
-        'txt',
-        'md',
-        'js',
-        'jsx',
-        'ts',
-        'tsx',
-        'py',
-        'java',
-        'go',
-        'rb',
-        'rs',
-        'c',
-        'cpp',
-        'h',
-        'hpp',
-        'json',
-        'yaml',
-        'yml',
-        'toml',
-        'xml',
-        'html',
-        'css',
-        'scss',
-        'sql',
-        'sh',
-      ],
-    },
-  });
-
-  if (!uris || !uris.length) {
-    return;
-  }
-
-  if (uris.length > MAX_TOTAL_FILES) {
-    throw new Error(`Too many files selected. Maximum is ${MAX_TOTAL_FILES}.`);
-  }
-
-  const progressTitle = `Varterm: preparing ${uris.length} file(s)`;
-  const documents: Array<{ path: string; content: string }> = [];
-  let totalChars = 0;
-
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: progressTitle,
-      cancellable: true,
-    },
-    async (progress, token) => {
-      for (let i = 0; i < uris.length; i += 1) {
-        if (token.isCancellationRequested) {
-          throw new Error('Ingestion cancelled');
-        }
-        const uri = uris[i];
-        progress.report({
-          message: `${i + 1}/${uris.length}: ${uri.path.split('/').pop() || uri.path}`,
-        });
-
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        if (bytes.byteLength > MAX_FILE_BYTES) {
-          throw new Error(`File is too large (${uri.fsPath}). Max size is ${MAX_FILE_BYTES} bytes.`);
-        }
-        if (looksLikeBinary(bytes)) {
-          throw new Error(`Binary file detected and skipped: ${uri.fsPath}`);
-        }
-
-        const content = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-        totalChars += content.length;
-        if (totalChars > settings.maxTotalTextChars) {
-          throw new Error(
-            `Combined text is too large. Max supported total is ${settings.maxTotalTextChars} characters.`
-          );
-        }
-
-        documents.push({
-          path: vscode.workspace.asRelativePath(uri, false) || uri.path,
-          content,
-        });
-      }
-
-      progress.report({ message: 'Uploading chunks to Varterm...' });
-      const response = await postJson<{ success: boolean; result: IngestResult }>(
-        context,
-        '/api/ingest',
-        {
-          documents,
-          options: {
-            chunkSize: settings.chunkSize,
-            overlap: settings.chunkOverlap,
-            maxChunks: 2000,
-            maxTotalChars: settings.maxTotalTextChars,
-          },
-        },
-        { cancellationToken: token }
-      );
-
-      await context.workspaceState.update(SESSION_KEY, {
-        sessionId: response.result.sessionId,
-        ingestedAt: Date.now(),
-        baseUrl: getBaseUrl(context),
-      });
-
-      const warning = response.result.truncated ? ' Some content was truncated by limits.' : '';
-      vscode.window.showInformationMessage(
-        `Ingested ${response.result.documentCount} file(s), ${response.result.chunkCount} chunks.${warning}`
-      );
-    }
-  );
-}
-
-async function ingestPayload(
-  context: vscode.ExtensionContext,
-  documents: Array<{ path: string; content: string }>
-): Promise<void> {
-  const settings = getSettings();
-  const response = await postJson<{ success: boolean; result: IngestResult }>(context, '/api/ingest', {
-    documents,
-    options: {
-      chunkSize: settings.chunkSize,
-      overlap: settings.chunkOverlap,
-      maxChunks: 2000,
-      maxTotalChars: settings.maxTotalTextChars,
-    },
-  });
-
-  await context.workspaceState.update(SESSION_KEY, {
-    sessionId: response.result.sessionId,
-    ingestedAt: Date.now(),
-    baseUrl: getBaseUrl(context),
-  });
-
-  const warning = response.result.truncated ? ' Some content was truncated by limits.' : '';
-  vscode.window.showInformationMessage(
-    `Ingested ${response.result.documentCount} file(s), ${response.result.chunkCount} chunks.${warning}`
-  );
-}
-
-function getEditorDocPath(document: vscode.TextDocument): string {
-  if (document.uri.scheme === 'file') {
-    return vscode.workspace.asRelativePath(document.uri, false) || document.uri.fsPath;
-  }
-  return `${document.uri.scheme}:${document.uri.path || document.uri.toString()}`;
-}
-
-async function ingestActiveEditor(context: vscode.ExtensionContext): Promise<void> {
-  const settings = getSettings();
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) {
-    throw new Error('No active editor to ingest.');
-  }
-
-  const selected = editor.document.getText(editor.selection).trim();
-  const content = selected || editor.document.getText().trim();
-  if (!content) {
-    throw new Error('Active editor has no text to ingest.');
-  }
-  if (content.length > settings.maxTotalTextChars) {
-    throw new Error(
-      `Editor text is too large. Max supported total is ${settings.maxTotalTextChars} characters.`
-    );
-  }
-
-  await ingestPayload(context, [{ path: getEditorDocPath(editor.document), content }]);
-}
-
-async function resolveSourceUri(sourcePath: string): Promise<vscode.Uri | null> {
-  if (!sourcePath) {
-    return null;
-  }
-
-  const directUri = vscode.Uri.file(sourcePath);
-  try {
-    await vscode.workspace.fs.stat(directUri);
-    return directUri;
-  } catch {
-    // Continue and try workspace-relative resolution.
-  }
-
-  const folders = vscode.workspace.workspaceFolders || [];
-  for (const folder of folders) {
-    const candidate = vscode.Uri.joinPath(folder.uri, sourcePath);
-    try {
-      await vscode.workspace.fs.stat(candidate);
-      return candidate;
-    } catch {
-      // Try next folder.
-    }
-  }
-
-  return null;
-}
-
-async function openSource(source: AskSource): Promise<void> {
-  const uri = await resolveSourceUri(source.path);
-  if (!uri) {
-    throw new Error(`Cannot locate source file: ${source.path}`);
-  }
-
-  const document = await vscode.workspace.openTextDocument(uri);
-  const editor = await vscode.window.showTextDocument(document, { preview: false });
-
-  const startChar = Math.max(0, source.startChar ?? 0);
-  const endChar = Math.max(startChar, source.endChar ?? startChar + 1);
-  const selection = new vscode.Selection(document.positionAt(startChar), document.positionAt(endChar));
-  editor.selection = selection;
-  editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
-}
-
-async function maybeOpenSourceFromAnswer(sources: AskSource[]): Promise<void> {
-  if (!sources.length) {
-    return;
-  }
-
-  const action = await vscode.window.showInformationMessage(
-    'Varterm answer ready.',
-    'Open a source file'
-  );
-  if (action !== 'Open a source file') {
-    return;
-  }
-
-  const picked = await vscode.window.showQuickPick(
-    sources.map((source) => ({
-      label: source.path,
-      description: `chunk ${source.chunk + 1}, score ${source.score}`,
-      source,
-    })),
-    { placeHolder: 'Select a source to open' }
-  );
-
-  if (picked?.source) {
-    await openSource(picked.source);
-  }
-}
-
-async function askAI(context: vscode.ExtensionContext): Promise<void> {
-  const settings = getSettings();
-  const question = await vscode.window.showInputBox({
-    title: 'Ask Varterm AI',
-    prompt: 'Ask a question about your ingested files',
-    ignoreFocusOut: true,
-  });
-  if (!question || !question.trim()) {
-    return;
-  }
-
-  const session = context.workspaceState.get<{ sessionId?: string }>(SESSION_KEY);
-  if (!session?.sessionId) {
-    throw new Error('No active ingestion session. Run "Varterm: Ingest Documents" first.');
-  }
-
-  const response = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: 'Varterm: asking AI',
-      cancellable: true,
-    },
-    async (progress, token) => {
-      progress.report({ message: 'Ranking context and generating answer...' });
-      return postJson<{
-        success: boolean;
-        result: {
-          answer: string;
-          sources: AskSource[];
-        };
-      }>(
-        context,
-        '/api/ask',
-        {
-          sessionId: session.sessionId,
-          question: question.trim(),
-          maxChunks: settings.askMaxChunks,
-          maxContextChars: settings.askMaxContextChars,
-        },
-        { cancellationToken: token }
-      );
-    }
-  );
-
-  const output = vscode.window.createOutputChannel('Varterm');
-  output.clear();
-  output.appendLine(`Q: ${question.trim()}`);
-  output.appendLine('');
-  output.appendLine(response.result.answer);
-  output.appendLine('');
-  output.appendLine('Sources:');
-  for (const source of response.result.sources) {
-    output.appendLine(`- ${source.path} (chunk ${source.chunk + 1}, score ${source.score})`);
-  }
-  output.show(true);
-
-  const readAction = settings.autoReadAnswersAloud
-    ? 'Reading answer aloud...'
-    : (await vscode.window.showInformationMessage('Varterm answer ready.', 'Read answer aloud'));
-
-  if (settings.autoReadAnswersAloud || readAction === 'Read answer aloud') {
-    await readTextAloud(context, response.result.answer, 'answer', { replace: true });
-  }
-
-  await maybeOpenSourceFromAnswer(response.result.sources);
 }
 
 class ReadCancelledError extends Error {
@@ -2741,6 +2390,9 @@ async function readTextAloud(
   if (process.platform === 'linux' && !linuxPlayer()) {
     throw new Error(NO_PLAYER_MESSAGE);
   }
+  if (process.platform === 'win32' && !existsSync(windowsPlayScript())) {
+    throw new Error('Windows playback script is missing from this install.');
+  }
 
   const spokenRate = getReadAloudRate(context);
   const spokenVoiceId = context.globalState.get<string>(VOICE_ID_KEY) || settings.readAloudVoice;
@@ -2782,8 +2434,7 @@ async function readTextAloud(
     playbackIndex = 0;
     logInfo(`Using provider=${selectedProvider}, chunks=${chunks.length}`);
 
-    const outputDir = audioCacheDir(context);
-    await vscode.workspace.fs.createDirectory(outputDir);
+    const outputDir = await ensureDir(playbackAudioDir());
     const stamp = Date.now();
     const files: string[] = [];
     const tracks: AudioTrack[] = [];
@@ -2840,11 +2491,11 @@ async function readTextAloud(
         throw new ReadCancelledError();
       }
 
-      const uri = vscode.Uri.joinPath(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
-      await vscode.workspace.fs.writeFile(uri, Buffer.from(audioBytes));
-      const stat = await vscode.workspace.fs.stat(uri);
-      logInfo(`Audio file ${uri.fsPath} size=${stat.size}`);
-      if (stat.size < 100) {
+      const filePath = path.join(outputDir, `varterm-play-${stamp}-${i + 1}.mp3`);
+      await writeAudioBytes(filePath, Buffer.from(audioBytes));
+      const info = await stat(filePath);
+      logInfo(`Audio file ${filePath} size=${info.size}`);
+      if (info.size < 100) {
         throw new Error('Generated audio file was empty. Try again.');
       }
 
@@ -2852,7 +2503,7 @@ async function readTextAloud(
         title: chunks.length === 1 ? label : `${label} (part ${i + 1}/${chunks.length})`,
         base64: Buffer.from(audioBytes).toString('base64'),
       });
-      files.push(uri.fsPath);
+      files.push(filePath);
       rememberPlayback(tracks, label, normalized);
       playbackFiles = files;
 
@@ -2935,10 +2586,6 @@ async function readTextAloud(
   }
 }
 
-function audioCacheDir(context: vscode.ExtensionContext): vscode.Uri {
-  return vscode.Uri.joinPath(context.globalStorageUri, 'audio');
-}
-
 function toSafeFileStem(label: string): string {
   const cleaned = label
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -2957,47 +2604,67 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-async function listCachedAudio(outputDir: vscode.Uri): Promise<Array<{ uri: vscode.Uri; mtime: number; size: number }>> {
-  let entries: Array<[string, vscode.FileType]>;
-  try {
-    entries = await vscode.workspace.fs.readDirectory(outputDir);
-  } catch {
-    return [];
+function protectedAudioPaths(): Set<string> {
+  const protect = new Set<string>(playbackFiles);
+  if (previewProcess) {
+    // Preview always reuses the same file name; keep whatever is there.
+    protect.add(path.join(playbackAudioDir(), 'varterm-preview.mp3'));
   }
-
-  const audioEntries = entries.filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.mp3'));
-  return Promise.all(
-    audioEntries.map(async ([name]) => {
-      const uri = vscode.Uri.joinPath(outputDir, name);
-      const stat = await vscode.workspace.fs.stat(uri);
-      return { uri, mtime: stat.mtime, size: stat.size };
-    })
-  );
+  return protect;
 }
 
 async function pruneAudioCache(context: vscode.ExtensionContext): Promise<void> {
   const settings = getSettings();
-  const outputDir = audioCacheDir(context);
-  const files = await listCachedAudio(outputDir);
-  if (!files.length) {
-    return;
+  const protect = protectedAudioPaths();
+  const dirs = [playbackAudioDir(), legacyAudioDir(context)];
+  let pruned = 0;
+  for (const dir of dirs) {
+    const files = await listMp3Files(dir);
+    const stale = filesToPrune(files, {
+      maxFiles: settings.maxCachedAudioFiles,
+      maxAgeHours: settings.maxCachedAudioAgeHours,
+      protect,
+    });
+    pruned += await deleteFiles(stale.map((file) => file.path));
   }
+  // Other Cursor windows use their own pid folder. Sweep abandoned ones so a
+  // crash does not leave temp audio forever.
+  pruned += await pruneAbandonedPlaybackDirs(settings.maxCachedAudioAgeHours);
+  if (pruned) {
+    logInfo(`Pruned ${pruned} cached audio file(s)`);
+  }
+}
 
-  const safeMaxFiles = Math.max(0, Math.min(200, settings.maxCachedAudioFiles));
-  const maxAgeHours = Math.max(0, Math.min(24 * 90, settings.maxCachedAudioAgeHours));
+async function pruneAbandonedPlaybackDirs(maxAgeHours: number): Promise<number> {
+  const root = playbackAudioRoot();
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return 0;
+  }
+  const ageMs = Math.max(1, maxAgeHours || 24) * 60 * 60 * 1000;
   const now = Date.now();
-  const expired =
-    maxAgeHours > 0 ? files.filter((file) => now - file.mtime > maxAgeHours * 60 * 60 * 1000) : [];
-  const expiredUris = new Set(expired.map((file) => file.uri.toString()));
-  const remaining = files.filter((file) => !expiredUris.has(file.uri.toString()));
-
-  remaining.sort((a, b) => b.mtime - a.mtime);
-  const overLimit = remaining.slice(safeMaxFiles);
-  const stale = [...expired, ...overLimit];
-  await Promise.all(stale.map(async (file) => vscode.workspace.fs.delete(file.uri, { useTrash: false })));
-  if (stale.length) {
-    logInfo(`Pruned ${stale.length} cached audio file(s)`);
+  let deleted = 0;
+  for (const name of names) {
+    const match = /^pid-(\d+)$/.exec(name);
+    if (!match || Number(match[1]) === process.pid) {
+      continue;
+    }
+    const dir = path.join(root, name);
+    let info;
+    try {
+      info = await stat(dir);
+    } catch {
+      continue;
+    }
+    if (now - info.mtimeMs < ageMs) {
+      continue;
+    }
+    const files = await listMp3Files(dir);
+    deleted += await deleteFiles(files.map((file) => file.path));
   }
+  return deleted;
 }
 
 async function saveLatestAudio(trackIndex = 0): Promise<void> {
@@ -3024,17 +2691,25 @@ async function saveLatestAudio(trackIndex = 0): Promise<void> {
 }
 
 async function clearAudioCache(context: vscode.ExtensionContext): Promise<void> {
-  const outputDir = audioCacheDir(context);
-  const audioEntries = await listCachedAudio(outputDir);
-  if (!audioEntries.length) {
+  const protect = protectedAudioPaths();
+  const dirs = [playbackAudioDir(), legacyAudioDir(context)];
+  const all: Array<{ path: string; size: number }> = [];
+  for (const dir of dirs) {
+    for (const file of await listMp3Files(dir)) {
+      if (!protect.has(file.path)) {
+        all.push(file);
+      }
+    }
+  }
+  if (!all.length) {
     vscode.window.showInformationMessage('No cached audio files found.');
     return;
   }
 
-  const totalBytes = audioEntries.reduce((sum, file) => sum + file.size, 0);
-  await Promise.all(audioEntries.map(async (file) => vscode.workspace.fs.delete(file.uri, { useTrash: false })));
+  const totalBytes = all.reduce((sum, file) => sum + file.size, 0);
+  await deleteFiles(all.map((file) => file.path));
   vscode.window.showInformationMessage(
-    `Cleared ${audioEntries.length} cached audio file(s) (${formatBytes(totalBytes)}).`
+    `Cleared ${all.length} cached audio file(s) (${formatBytes(totalBytes)}).`
   );
 }
 

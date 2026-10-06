@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.72 - 2026-10-06
+
+### Fixed
+- Long reads no longer die writing an MP3. The Sentry error `Unable to write file 'vscode-userdata:…/audio/varterm-play-…-24.mp3'` came from writing each part through Cursor's userdata filesystem into a folder shared by every window. Playback files now go to the OS temp directory through Node's filesystem, and prune skips files that are still playing.
+- `Varterm: Toggle Agents Window Reading` is declared in `package.json`, so it appears in the Command Palette.
+
+### Removed
+- Editor extension: three declared-but-unregistered commands (`signInAccount`, `signOutAccount`, `saveToLibrary`) and five settings for an ingest/ask feature with no entry point (`chunkSize`, `chunkOverlap`, `askMaxChunks`, `askMaxContextChars`, `autoReadAnswersAloud`), along with the dead `ingestDocuments` / `askAI` code behind them.
+
+### Changed
+- Store README, site copy, and `docs/marketing.md` brought in line with current behaviour: shared reading queue across windows, markdown stripping, Agents window switch, bring-your-own-key ElevenLabs, 29 languages / 31 locales.
+
+## 0.1.71 - 2026-10-02
+
+### Fixed
+- Windows playback plays. The player added for the Sentry error `Background playback currently uses macOS afplay` slept until Windows Media Player reported a duration. That report only arrives while the player's message loop is running, so the wait timed out and the clip never started. The loop now runs until the clip ends, and a failure includes the reason.
+
 ## 0.1.70 - 2026-09-22
 
 ### Fixed

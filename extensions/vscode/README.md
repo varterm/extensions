@@ -10,7 +10,7 @@ Running many Cursor windows? Install **once for your user** — not **Install Wo
 
 Prefer a file? Grab `varterm-cursor-*.vsix` from [GitHub Releases](https://github.com/varterm/extensions/releases) and run `Extensions: Install from VSIX...`.
 
-**On Linux**, one MP3 player needs to be on your `PATH`: `ffplay` (from ffmpeg), `mpv`, `mpg123`, `mpg321`, `cvlc` (VLC), `gst-play-1.0`, or `play` (SoX). Installing ffmpeg covers it. Varterm takes the first it finds and checks before synthesising, so a missing player is named up front rather than surfacing as a failure once audio is ready. macOS and Windows need nothing installed.
+**macOS and Windows need nothing installed.** Playback uses what the OS already ships. **On Linux**, one MP3 player needs to be on your `PATH`: `ffplay` (from ffmpeg), `mpv`, `mpg123`, `mpg321`, `cvlc` (VLC), `gst-play-1.0`, or `play` (SoX). Installing ffmpeg covers it. Varterm takes the first it finds and checks before synthesising, so a missing player is named up front rather than surfacing as a failure once audio is ready.
 
 More at [varterm.com/extensions](https://varterm.com/extensions).
 
@@ -19,6 +19,7 @@ More at [varterm.com/extensions](https://varterm.com/extensions).
 Select text **in a file** and press **Play**, or the selection / clipboard icon to the right of Auto-read. The highlight is read directly. Copy is only used when nothing is selected.
 
 - Right-click a selection → **Read Selection Aloud**.
+- **Markdown is stripped before speech.** Headings, emphasis, lists, tables, code fences, links, and escapes are removed first, so the voice does not say "hashtag" or "backslash" through a plan or a README.
 - The status bar icon turns into a selection mark while text is highlighted, and a clipboard when it will read what you copied.
 - Click the **speed** chip (`1×`) at the end of that row for a menu: 0.75×–2×, voice, and settings. In the voice list, click the speaker to preview; Enter uses that voice.
 - **Build plans.** Cursor’s plan view is not a text editor and often cannot copy. Press the selection button to hear the markdown file behind the plan (`~/.cursor/plans` or `.cursor/plans`). To hear a highlight only, open the plan with **Open With → Text Editor**.
@@ -30,10 +31,11 @@ Click **Auto-read** in the status bar. When an agent reply **finishes**, it play
 
 It changes the loop: send the prompt, go back to your file, and let the answer come to you. No parking on the chat panel watching tokens stream, no scrolling back up to find the one line that mattered — jump back and hear it again.
 
-- One install covers every Cursor window; only the focused window speaks, so parallel agents never talk over each other. Other windows show the mark dimmed while another one is talking, and pressing Play there moves playback over instead of starting a second copy.
+- One install covers every Cursor window, and only one window speaks at a time, so parallel agents never talk over each other. Finished replies from every open project join one queue and are read in the order they arrived; whichever window is free reads the next. Other windows show the mark dimmed while one is talking, and pressing Play there moves playback over instead of starting a second copy.
 - Playback stays in the editor — no Music.app, no extra tab. macOS and Windows need nothing installed; Linux wants an MP3 player, covered under Install.
 - Transport is icon-only while playing: jump back, pause, stop, jump forward, replay. A queue icon appears when something is waiting or you can go back. Auto-read joins the queue instead of cutting off the current listen.
-- With several projects open, all of them feed one queue, so replies are read in the order they arrived and whichever window is free reads the next. The queue lists which project each one came from. Anything still waiting after ten minutes is dropped rather than read out late.
+- The queue lists which project each waiting reply came from. Anything still waiting after ten minutes is dropped rather than read out late (`vartermCursor.queueItemExpiryMinutes`). Set `vartermCursor.sharedListenQueue` to false to keep each window's queue to itself.
+- **Agents window.** Cursor does not run extensions inside its Agents window, so an editor reads for it: toggle **Agents window on** in the status bar (or `Varterm: Toggle Agents Window Reading`) and that editor reads every finished reply from the Agents window. An editor's own Auto-read never picks up a reply from another project.
 - The logo mark animates between Play and Auto-read so you can spot the window that is talking — five solid capsules rippling out from the centre line. It settles into the static mark when paused and vanishes when idle.
 - The mark also tells you which window is next: green and moving means the reading is happening here, amber means this window has a reply waiting and hovering says where it sits in the line, and a dim static mark means another window is talking.
 - Each jump moves one part, so you can skip the preamble without losing the rest of the reply.
@@ -51,7 +53,7 @@ Built for text that does not fit in one request — whole files, RFCs, and long 
 
 ## Voices and languages
 
-66 neural voices across 29 languages. Pick one from the `1×` chip → **Voice**, or `Varterm: Select Read-Aloud Voice`, and preview it before committing. Each entry shows its locale and a short description, so typing a language name finds its voices.
+66 neural voices across 29 languages (31 locales). Pick one from the `1×` chip → **Voice**, or `Varterm: Select Read-Aloud Voice`, and preview it before committing. Each entry shows its locale and a short description, so typing a language name finds its voices. All of them are free, with no account.
 
 Arabic, Bengali, Chinese (Simplified), Chinese (Traditional), Dutch, English (US, UK, Australia), Farsi, French, German, Hebrew, Hindi, Indonesian, Italian, Japanese, Korean, Malayalam, Polish, Portuguese, Romanian, Russian, Spanish, Swahili, Tamil, Telugu, Thai, Turkish, Ukrainian, Urdu, and Vietnamese.
 
@@ -61,6 +63,8 @@ The list comes from the service rather than the extension, so voices added later
 
 Voices are locale specific, and a mismatched one returns silence rather than an error. Hand an English voice a page of Chinese and Varterm names a voice that can read it instead of leaving you with a failure and nothing to act on.
 
+**Bring your own ElevenLabs key.** Run `Varterm: Set ElevenLabs API Key`, then pick a voice marked **Premium** in the voice list (this sets `readAloudProvider` to `premium`). Your key is kept in the editor's secret storage and your ElevenLabs account is billed directly; Varterm adds nothing on top. If the key is missing or rejected, the read falls back to the free Edge voice and tells you.
+
 ## Commands
 
 - `Varterm: Read Selection Aloud` — speak the highlight. Nothing is copied.
@@ -69,10 +73,12 @@ Voices are locale specific, and a mismatched one returns silence rather than an 
 - `Varterm: Read Clipboard Aloud` — speak whatever you copied.
 - `Varterm: Read Errors & Warnings Aloud` — speak diagnostics for the current file.
 - `Varterm: Toggle Auto-Read` — agent replies play when they finish.
+- `Varterm: Toggle Agents Window Reading` — this editor reads every finished reply from Cursor's Agents window.
+- `Varterm: Listen Queue` — see and pick from the replies waiting to be read.
 - `Varterm: Read Last Agent Reply` — hear the last reply again, from the status bar speech-bubble or `⌘⇧⌥A` / `Ctrl+Shift+Alt+A`. No copying.
-- `Varterm: Pause Playback` / `Resume Playback` / `Stop Playback` / `Replay Last Audio`.
+- `Varterm: Pause Playback` / `Resume Playback` / `Stop Playback` / `Replay Last Audio` / `Jump Back` / `Jump Forward`.
 - `Varterm: Reading Speed and Voice` — status bar speed chip: 0.75×–2×, voice, settings.
-- `Varterm: Select Read-Aloud Voice` — 66 Edge voices across 29 languages, plus Premium.
+- `Varterm: Select Read-Aloud Voice` — 66 free Edge voices across 29 languages, plus Premium (ElevenLabs, your key).
 - `Varterm: Set ElevenLabs API Key` — stored in secure extension storage.
 - `Varterm: Connect` — only for a custom server or token.
 - `Varterm: Open Settings` / `Customize Keyboard Shortcuts`.
@@ -94,12 +100,13 @@ Everything lives under `vartermCursor.*`:
 
 - `readAloudVoice`, `readAloudRate`, `readAloudProvider` — voice, speed, Edge or Premium. Speed is also the `1×` chip on the status bar.
 - `autoReadAgentOutput` — mirrored from the status bar. Off/On after restart comes from `~/.cursor/varterm-autoread.json`, so an update cannot turn it back on.
+- `autoReadAgentsWindow` — this editor reads every finished reply from Cursor's Agents window (default off).
 - `showPlayingIndicator` — the animated meter in the status bar (default on).
 - `resumeRewindMs` — how far resume rewinds after a pause (default 600ms) so no words are lost at the join.
 - `sharedListenQueue` (default on) — every window feeds one queue. Off keeps a window's queue to itself.
 - `queueItemExpiryMinutes` (default 10; `0` never expires) — drop queued replies that have waited longer than this.
 - `maxCachedAudioFiles` (default 8), `maxCachedAudioAgeHours` (default 24; `0` keeps until the count limit).
-- `requestTimeoutMs`, `requestRetries` — for very long passages.
+- `maxTotalTextChars` (default 1,000,000), `requestTimeoutMs`, `requestRetries` — for very long passages.
 - `elevenLabsApiKey` — plain-text fallback; the secure command is preferred.
 - `telemetry` — send crash and failed-read reports to Sentry (default on). Never includes the text you listen to. Also off when Cursor/VS Code telemetry is off.
 

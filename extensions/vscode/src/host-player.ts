@@ -31,6 +31,35 @@ export const NO_PLAYER_MESSAGE =
   'No audio player was found. Varterm needs one of ffmpeg (ffplay), mpv, mpg123, VLC, ' +
   'or SoX on PATH to play sound on Linux. Installing ffmpeg is usually enough.';
 
+// Windows PowerShell, not whatever `powershell` happens to be on PATH. Cursor's
+// extension host does not always inherit System32.
+export function windowsPowershell(env: NodeJS.ProcessEnv = process.env): string {
+  const root = env.SystemRoot || env.WINDIR;
+  if (!root) {
+    return 'powershell.exe';
+  }
+  return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+// -STA is required. MediaPlayer is a WPF object and will not open a clip from
+// an MTA thread. -File keeps the script's exit code, which is how a failed
+// clip is told apart from a clip that finished.
+export function windowsPlayArguments(scriptPath: string, filePath: string): string[] {
+  return [
+    '-STA',
+    '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle',
+    'Hidden',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    scriptPath,
+    '-Path',
+    filePath,
+  ];
+}
+
 function isExecutable(file: string): boolean {
   try {
     accessSync(file, constants.X_OK);

@@ -7,7 +7,7 @@
 //
 // Run with: npm test
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,8 @@ if (!existsSync(BUILT)) {
   process.exit(1);
 }
 
-const { findLinuxPlayer, LINUX_PLAYERS, NO_PLAYER_MESSAGE } = await import(BUILT);
+const { findLinuxPlayer, LINUX_PLAYERS, NO_PLAYER_MESSAGE, windowsPlayArguments, windowsPowershell } =
+  await import(BUILT);
 
 const results = [];
 const check = (name, pass, detail = '') => results.push({ name, pass: !!pass, detail });
@@ -87,6 +88,24 @@ try {
   check('no WAV-only players are offered',
     !LINUX_PLAYERS.some((p) => ['aplay', 'paplay'].includes(p.cmd)));
   check('empty PATH segments are skipped', findLinuxPlayer(`${delimiter}${delimiter}`) === null);
+
+  // --- Windows ----------------------------------------------------------------
+  // The September 12 report was "Background playback currently uses macOS
+  // afplay." The player added that day slept until MediaPlayer published a
+  // duration, which never happens unless the dispatcher is pumped, so Windows
+  // still produced no sound.
+  const playScript = readFileSync(join(ROOT, 'scripts/play-mp3.ps1'), 'utf8');
+  check('windows player pumps the dispatcher', playScript.includes('CurrentDispatcher.Invoke'));
+  check('windows player still uses MediaPlayer', playScript.includes('System.Windows.Media.MediaPlayer'));
+  check('windows player reports a failure on stderr', playScript.includes('OpenStandardError'));
+
+  const winArgs = windowsPlayArguments('C:\\ext\\scripts\\play-mp3.ps1', 'C:\\cache\\clip.mp3');
+  check('windows player is STA', winArgs[0] === '-STA');
+  check('windows player runs the script file', winArgs.includes('-File') && winArgs.includes('C:\\ext\\scripts\\play-mp3.ps1'));
+  check('windows player passes the clip', winArgs.at(-1) === 'C:\\cache\\clip.mp3');
+  check('windows powershell uses System32',
+    windowsPowershell({ SystemRoot: 'C:\\Windows' }).includes('WindowsPowerShell'));
+  check('windows powershell falls back to PATH', windowsPowershell({}) === 'powershell.exe');
 } finally {
   for (const dir of temps) rmSync(dir, { recursive: true, force: true });
 }

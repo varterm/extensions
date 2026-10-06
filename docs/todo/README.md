@@ -1,5 +1,8 @@
 # TODO: Feature Backlog
 
+Feature work lives here. Distribution is in [Marketing](../marketing.md) —
+post on the r/cursor thread once we are ready to push traffic.
+
 These features enhance the TTS functionality of the Varterm extension.
 
 ## Priority Order

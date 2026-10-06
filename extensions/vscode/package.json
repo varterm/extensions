@@ -2,7 +2,7 @@
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
   "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.70",
+  "version": "0.1.72",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {
@@ -125,16 +125,8 @@
         "title": "Varterm: Save Last Audio as MP3"
       },
       {
-        "command": "vartermCursor.signInAccount",
-        "title": "Varterm: Sign In to Account"
-      },
-      {
-        "command": "vartermCursor.signOutAccount",
-        "title": "Varterm: Sign Out of Account"
-      },
-      {
-        "command": "vartermCursor.saveToLibrary",
-        "title": "Varterm: Save Last Playback to Library"
+        "command": "vartermCursor.toggleAgentsWindowReading",
+        "title": "Varterm: Toggle Agents Window Reading"
       }
     ],
     "menus": {
@@ -218,40 +210,7 @@
           "default": 1000000,
           "minimum": 10000,
           "maximum": 5000000,
-          "description": "Maximum combined characters processed in a single operation."
-        },
-        "vartermCursor.chunkSize": {
-          "type": "number",
-          "default": 1800,
-          "minimum": 400,
-          "maximum": 5000,
-          "description": "Chunk size used when processing large text."
-        },
-        "vartermCursor.chunkOverlap": {
-          "type": "number",
-          "default": 250,
-          "minimum": 0,
-          "maximum": 2000,
-          "description": "Chunk overlap used when processing large text."
-        },
-        "vartermCursor.askMaxChunks": {
-          "type": "number",
-          "default": 8,
-          "minimum": 1,
-          "maximum": 30,
-          "description": "Advanced compatibility setting for context chunk retrieval."
-        },
-        "vartermCursor.askMaxContextChars": {
-          "type": "number",
-          "default": 15000,
-          "minimum": 1000,
-          "maximum": 50000,
-          "description": "Advanced compatibility setting for max context characters."
-        },
-        "vartermCursor.autoReadAnswersAloud": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically synthesize and play generated text responses."
+          "description": "Maximum combined characters read in a single operation."
         },
         "vartermCursor.autoReadAgentOutput": {
           "type": "boolean",
@@ -405,7 +364,7 @@
     "icons": "node scripts/build-icon-font.mjs",
     "watch": "tsc -watch -p .",
     "check": "tsc --noEmit -p .",
-    "test": "tsc -p . && node tests/speech-text.test.mjs && node tests/host-player.test.mjs && node tests/agent-drop.test.mjs && node tests/telemetry-filter.test.mjs && node tests/listen-queue.test.mjs",
+    "test": "tsc -p . && node tests/speech-text.test.mjs && node tests/host-player.test.mjs && node tests/audio-cache.test.mjs && node tests/agent-drop.test.mjs && node tests/telemetry-filter.test.mjs && node tests/listen-queue.test.mjs",
     "package": "npm run build && npx @vscode/vsce package --follow-symlinks",
     "publish:stores": "bash scripts/publish-stores.sh",
     "publish:ovsx": "bash scripts/publish-stores.sh --only-ovsx",

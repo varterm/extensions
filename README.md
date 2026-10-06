@@ -2,7 +2,7 @@
 
 Source for the Varterm editor and browser extensions. MIT licensed.
 
-The editor extension ships **highlight-to-listen** (select text, no copy) and **Agent Auto-read**: finished Cursor agent replies play while you keep working. One install, every window, zero echo. Long replies split into parts you can jump through, so you skip the preamble instead of scrolling the chat. Same engine reads whole files, RFCs, and multi-page docs — playback starts on part one while the rest generates.
+The editor extension ships **highlight-to-listen** (select text, no copy) and **Agent Auto-read**: finished Cursor agent replies play while you keep working. One install, every window, zero echo — replies from every open project join one queue and are read in the order they arrived. Long replies split into parts you can jump through, so you skip the preamble instead of scrolling the chat. Markdown is stripped before speech. Same engine reads whole files, RFCs, and multi-page docs — playback starts on part one while the rest generates. 66 free neural voices across 29 languages, or bring your own ElevenLabs key.
 
 
 ## Repository Layout
@@ -13,6 +13,9 @@ The editor extension ships **highlight-to-listen** (select text, no copy) and **
 - `packages/tts-client` - shared API client used by extension surfaces.
 - `.claude-plugin/marketplace.json` - makes this repo a Claude Code plugin
   marketplace, so `claude plugin marketplace add varterm/extensions` works.
+- [`docs/marketing.md`](docs/marketing.md) - where to post once we start pushing
+  traffic. The r/cursor thread is called out there.
+- `docs/todo/` - feature backlog.
 
 ## Build and Package
 
