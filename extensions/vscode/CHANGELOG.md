@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.74 - 2026-10-06
 
 ### Changed
+- **The listing tells Windows users the playback bugs are fixed.** Builds up to 0.1.62 refused to play on Windows (`Background playback currently uses macOS afplay`) and 0.1.63–0.1.70 played silently. Both were fixed in 0.1.71, but nothing on the store page said so, and the one review on Open VSX is a one-star quoting that error. The README now says it up front, under Install, and the lead says the extension works on macOS, Windows, and Linux.
 - "MIT" in the store description and README lead is now "MIT licensed". Read aloud, the bare abbreviation comes out as "mitt".
 
 ## 0.1.73 - 2026-10-06

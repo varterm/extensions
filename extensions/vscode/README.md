@@ -1,6 +1,6 @@
 # Varterm TTS
 
-**Varterm reads Cursor and VS Code aloud.** Turn on **Agent Auto-read** and finished agent replies play while you keep working. Highlight text in any file and hear it. Jump through long replies part by part. 66 free neural voices in 29 languages, or your own ElevenLabs key. Play, pause, and change speed from the status bar. MIT licensed. No account.
+**Varterm reads Cursor and VS Code aloud.** Turn on **Agent Auto-read** and finished agent replies play while you keep working. Highlight text in any file and hear it. Jump through long replies part by part. 66 free neural voices in 29 languages, or your own ElevenLabs key. Play, pause, and change speed from the status bar. Works on macOS, Windows, and Linux. MIT licensed. No account.
 
 ## Install
 
@@ -10,7 +10,11 @@ Running many Cursor windows? Install **once for your user** — not **Install Wo
 
 Prefer a file? Grab `varterm-cursor-*.vsix` from [GitHub Releases](https://github.com/varterm/extensions/releases) and run `Extensions: Install from VSIX...`.
 
-**macOS and Windows need nothing installed.** Playback uses what the OS already ships. **On Linux**, one MP3 player needs to be on your `PATH`: `ffplay` (from ffmpeg), `mpv`, `mpg123`, `mpg321`, `cvlc` (VLC), `gst-play-1.0`, or `play` (SoX). Installing ffmpeg covers it. Varterm takes the first it finds and checks before synthesising, so a missing player is named up front rather than surfacing as a failure once audio is ready.
+**macOS and Windows need nothing installed.** Playback uses what the OS already ships.
+
+**Windows users: if you tried Varterm before October 2026, try it again.** Builds 0.1.62 and earlier refused to play on Windows with `Background playback currently uses macOS afplay`, and 0.1.63 through 0.1.70 started a player that produced no sound. Both are fixed in 0.1.71 and later: playback runs through Windows' own media player, and a failed clip now says why in the Varterm output channel instead of failing silently. The one-star review on Open VSX quoting that error is from 0.1.62, and it was right at the time.
+
+**On Linux**, one MP3 player needs to be on your `PATH`: `ffplay` (from ffmpeg), `mpv`, `mpg123`, `mpg321`, `cvlc` (VLC), `gst-play-1.0`, or `play` (SoX). Installing ffmpeg covers it. Varterm takes the first it finds and checks before synthesising, so a missing player is named up front rather than surfacing as a failure once audio is ready.
 
 More at [varterm.com/extensions](https://varterm.com/extensions).
 

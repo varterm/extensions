@@ -1,4 +1,4 @@
-# Submit Varterm TTS 0.1.73
+# Submit Varterm TTS 0.1.74
 
 Both stores take their **short description** from `package.json` and their **long description** from `README.md` when you publish this VSIX. Neither is edited in the store UI; change the files and publish.
 
@@ -8,9 +8,9 @@ npm run publish:stores      # both stores
 npm run publish:ovsx        # Open VSX only, no Azure token needed
 ```
 
-Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.73.vsix`
+Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.74.vsix`
 
-Current state: Open VSX is on **0.1.72**; the VS Code Marketplace is on **0.1.66** because `VSCE_PAT` is a placeholder and 0.1.67–0.1.72 were never uploaded there. The Marketplace jump is therefore 0.1.66 → 0.1.73 in one step, and its "What's new" has to cover everything since 0.1.66.
+Current state: Open VSX is on **0.1.73**; the VS Code Marketplace is on **0.1.66** because `VSCE_PAT` is a placeholder and 0.1.67–0.1.72 were never uploaded there. The Marketplace jump is therefore 0.1.66 → 0.1.74 in one step, and its "What's new" has to cover everything since 0.1.66.
 
 Because the long description ships *inside* the VSIX, any further README edits have to happen before `npm run package`, not after. A published version cannot be replaced, so late copy waits for the next one.
 
@@ -28,10 +28,10 @@ New in 0.1.73. The previous line opened with "Highlight text to hear it — no c
 
 ## What's new
 
-Open VSX (coming from 0.1.72):
+Open VSX (coming from 0.1.73):
 
 ```
-The listing now says what this is: text to speech for Cursor and VS Code, with agent replies read aloud as they finish. No code changes.
+Windows users: the playback bugs are fixed. Builds through 0.1.62 refused to play on Windows and 0.1.63–0.1.70 played silently; 0.1.71 and later work. The listing now says so. No code changes.
 ```
 
 VS Code Marketplace (coming from 0.1.66):
@@ -48,7 +48,7 @@ Windows playback works out of the box. Long selections no longer fail part-way t
 
 1. https://marketplace.visualstudio.com/manage/publishers/varterm
 2. **varterm.varterm-cursor** → **… → Update**
-3. Upload `varterm-cursor-0.1.73.vsix`
+3. Upload `varterm-cursor-0.1.74.vsix`
 
 ## Checking what each store is serving
 

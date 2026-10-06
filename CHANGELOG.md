@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.74 - 2026-10-06
+
+### Changed
+- Editor README states plainly that the Windows playback bugs (refusal through 0.1.62, silence in 0.1.63–0.1.70) were fixed in 0.1.71, next to the install notes where Windows users look. The only Open VSX review is a one-star quoting the old error and nothing on the page answered it. Lead line adds "Works on macOS, Windows, and Linux." "MIT" becomes "MIT licensed" so it reads correctly aloud. Description-only release.
+
 ## 0.1.73 - 2026-10-06
 
 ### Changed
