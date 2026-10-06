@@ -21,7 +21,7 @@ on both stores):
 
 > Text to speech for Cursor and VS Code. Hear agent replies read aloud as they
 > finish, or highlight any text and listen. Speed, voice, and playback from the
-> status bar. Free, MIT, no account.
+> status bar. Free, MIT licensed, no account.
 
 Longer form:
 

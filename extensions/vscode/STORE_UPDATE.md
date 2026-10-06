@@ -19,7 +19,7 @@ Because the long description ships *inside* the VSIX, any further README edits h
 ## Short description (both stores)
 
 ```
-Text to speech for Cursor and VS Code. Hear agent replies read aloud as they finish, or highlight any text and listen. Speed, voice, and playback from the status bar. Free, MIT, no account.
+Text to speech for Cursor and VS Code. Hear agent replies read aloud as they finish, or highlight any text and listen. Speed, voice, and playback from the status bar. Free, MIT licensed, no account.
 ```
 
 New in 0.1.73. The previous line opened with "Highlight text to hear it — no copy", which referred to a clipboard step removed in 0.1.47 and never said "text to speech".

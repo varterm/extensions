@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- "MIT" in the store description and README lead is now "MIT licensed". Read aloud, the bare abbreviation comes out as "mitt".
+
 ## 0.1.73 - 2026-10-06
 
 ### Changed

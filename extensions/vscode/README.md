@@ -1,6 +1,6 @@
 # Varterm TTS
 
-**Varterm reads Cursor and VS Code aloud.** Turn on **Agent Auto-read** and finished agent replies play while you keep working. Highlight text in any file and hear it. Jump through long replies part by part. 66 free neural voices in 29 languages, or your own ElevenLabs key. Play, pause, and change speed from the status bar. MIT. No account.
+**Varterm reads Cursor and VS Code aloud.** Turn on **Agent Auto-read** and finished agent replies play while you keep working. Highlight text in any file and hear it. Jump through long replies part by part. 66 free neural voices in 29 languages, or your own ElevenLabs key. Play, pause, and change speed from the status bar. MIT licensed. No account.
 
 ## Install
 
