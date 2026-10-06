@@ -1,6 +1,6 @@
 # Varterm TTS
 
-**Highlight text to hear it — nothing is copied.** Select a range in the editor and click the status bar icon, or right-click **Read Selection Aloud**. Flip on Agent Auto-read and finished replies play while you keep working. Click **1×** for speed and voice — preview a voice before you pick it. Play, pause, stop, jump from the status bar. MIT. No login.
+**Varterm reads Cursor and VS Code aloud.** Turn on **Agent Auto-read** and finished agent replies play while you keep working. Highlight text in any file and hear it. Jump through long replies part by part. 66 free neural voices in 29 languages, or your own ElevenLabs key. Play, pause, and change speed from the status bar. MIT. No account.
 
 ## Install
 

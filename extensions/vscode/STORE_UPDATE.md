@@ -1,4 +1,4 @@
-# Submit Varterm TTS 0.1.66
+# Submit Varterm TTS 0.1.73
 
 Both stores take their **short description** from `package.json` and their **long description** from `README.md` when you publish this VSIX. Neither is edited in the store UI; change the files and publish.
 
@@ -8,9 +8,9 @@ npm run publish:stores      # both stores
 npm run publish:ovsx        # Open VSX only, no Azure token needed
 ```
 
-Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.66.vsix`
+Artifact: `extensions/extensions/vscode/varterm-cursor-0.1.73.vsix`
 
-Current state: both stores are on **0.1.65** and in step with each other for the first time in several releases, so this is a straight one-version bump on both. Nothing is outstanding from an earlier release, and the listing copy in this VSIX is current.
+Current state: Open VSX is on **0.1.72**; the VS Code Marketplace is on **0.1.66** because `VSCE_PAT` is a placeholder and 0.1.67–0.1.72 were never uploaded there. The Marketplace jump is therefore 0.1.66 → 0.1.73 in one step, and its "What's new" has to cover everything since 0.1.66.
 
 Because the long description ships *inside* the VSIX, any further README edits have to happen before `npm run package`, not after. A published version cannot be replaced, so late copy waits for the next one.
 
@@ -19,20 +19,26 @@ Because the long description ships *inside* the VSIX, any further README edits h
 ## Short description (both stores)
 
 ```
-Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.
+Text to speech for Cursor and VS Code. Hear agent replies read aloud as they finish, or highlight any text and listen. Speed, voice, and playback from the status bar. Free, MIT, no account.
 ```
 
-Unchanged in 0.1.66.
+New in 0.1.73. The previous line opened with "Highlight text to hear it — no copy", which referred to a clipboard step removed in 0.1.47 and never said "text to speech".
 
 ---
 
 ## What's new
 
+Open VSX (coming from 0.1.72):
+
 ```
-Open several projects at once and they now share one reading queue, so replies are read in the order they arrived and whichever window is free reads the next. The status bar says which window is talking and which is waiting its turn. Fixes a reply queued behind another window that could wait indefinitely, and two windows that could start reading at the same moment.
+The listing now says what this is: text to speech for Cursor and VS Code, with agent replies read aloud as they finish. No code changes.
 ```
 
-Both stores are coming from 0.1.65, so this covers only what 0.1.66 changes.
+VS Code Marketplace (coming from 0.1.66):
+
+```
+Windows playback works out of the box. Long selections no longer fail part-way through. An editor can read every finished reply from Cursor's Agents window. Three commands that did nothing and five unused settings are gone. The listing now describes what ships: one shared reading queue across windows, markdown stripped before speech, 66 free voices in 29 languages, and ElevenLabs with your own key.
+```
 
 ---
 
@@ -42,7 +48,7 @@ Both stores are coming from 0.1.65, so this covers only what 0.1.66 changes.
 
 1. https://marketplace.visualstudio.com/manage/publishers/varterm
 2. **varterm.varterm-cursor** → **… → Update**
-3. Upload `varterm-cursor-0.1.66.vsix`
+3. Upload `varterm-cursor-0.1.73.vsix`
 
 ## Checking what each store is serving
 

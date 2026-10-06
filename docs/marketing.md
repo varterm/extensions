@@ -16,10 +16,19 @@ no post.
 
 ## The pitch (keep in step with `extensions/vscode/README.md`)
 
-Varterm TTS reads text aloud inside Cursor and VS Code. Highlight text and hear
-it — nothing is copied. Flip on **Agent Auto-read** and finished agent replies
-play while you keep working: send the prompt, go back to your file, and the
-answer comes to you. Long replies split into parts you can jump through, so
+Store one-liner (this is `description` in `package.json`, shown under the title
+on both stores):
+
+> Text to speech for Cursor and VS Code. Hear agent replies read aloud as they
+> finish, or highlight any text and listen. Speed, voice, and playback from the
+> status bar. Free, MIT, no account.
+
+Longer form:
+
+Varterm reads Cursor and VS Code aloud. Turn on **Agent Auto-read** and
+finished agent replies play while you keep working: send the prompt, go back
+to your file, and the answer comes to you. Highlight text in any file and hear
+it. Long replies split into parts you can jump through, so
 you skip the preamble instead of scrolling the chat. Markdown is stripped
 before speech. Open several projects and every window feeds one reading queue,
 so parallel agents never talk over each other. 66 free neural voices across 29
@@ -33,6 +42,9 @@ Things not to claim:
 - Accounts, sign-in, or a library. There is none.
 - Offline or on-device voices. Those are the web app (Piper), not the editor.
 - A paid tier. ElevenLabs in the editor is your own key, billed by ElevenLabs.
+- "No copy" / "nothing is copied". That contrasted with a clipboard step
+  removed in 0.1.47. New readers have no idea what it means; lead with what the
+  product does.
 
 ## Where to post
 

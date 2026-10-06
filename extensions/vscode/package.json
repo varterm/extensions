@@ -1,8 +1,8 @@
 {
   "name": "varterm-cursor",
   "displayName": "Varterm TTS",
-  "description": "Highlight text to hear it — no copy. Auto-read speaks agent replies. Change speed and preview voices from the status bar.",
-  "version": "0.1.72",
+  "description": "Text to speech for Cursor and VS Code. Hear agent replies read aloud as they finish, or highlight any text and listen. Speed, voice, and playback from the status bar. Free, MIT, no account.",
+  "version": "0.1.73",
   "publisher": "varterm",
   "icon": "assets/icon.png",
   "galleryBanner": {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.73 - 2026-10-06
+
+### Changed
+- Editor extension store description and README lead rewritten to say what the product is: text to speech for Cursor and VS Code, agent replies read aloud. The old lead, "Highlight text to hear it — no copy", referred to a copy step removed in 0.1.47. Description-only release.
+
 ## 0.1.72 - 2026-10-06
 
 ### Fixed

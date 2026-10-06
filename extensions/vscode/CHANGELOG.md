@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.73 - 2026-10-06
+
+### Changed
+- **The listing says what this is.** The store description opened with "Highlight text to hear it — no copy", a reference to a copy step removed in 0.1.47 that nobody arriving today knows about, and never said "text to speech". It now leads with text to speech for Cursor and VS Code and agent replies read aloud. No code changes.
+
 ## 0.1.72 - 2026-10-06
 
 ### Fixed
