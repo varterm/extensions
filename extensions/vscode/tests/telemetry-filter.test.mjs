@@ -39,6 +39,23 @@ test('an error with no status falls through to the message list', () => {
   assert.equal(shouldReportError(new Error('No audio to replay yet.')), false);
 });
 
+test('pressing play before a reply exists is not reported', () => {
+  assert.equal(
+    shouldReportError(new Error('This chat has no reply to read yet. Stay on this tab until the reply finishes.')),
+    false
+  );
+  assert.equal(
+    shouldReportError(
+      new Error('The last agent reply belongs to another window. Varterm only replays replies from this one.')
+    ),
+    false
+  );
+  assert.equal(
+    shouldReportError(new Error('No agent reply captured yet. Leave Auto-read on and wait for a reply to finish.')),
+    false
+  );
+});
+
 test('the local no-op message is skipped even without a status', () => {
   assert.equal(shouldReportError(new Error('That text has nothing to read aloud.')), false);
 });

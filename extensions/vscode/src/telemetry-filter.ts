@@ -8,6 +8,8 @@ export const SKIP_MESSAGES = [
   'Nothing is paused.',
   'No audio to replay yet.',
   'No agent reply captured yet',
+  'This chat has no reply to read yet',
+  'The last agent reply belongs to another window',
   'No text available to read aloud',
   'That text has nothing to read aloud',
   'Background playback currently uses macOS afplay',

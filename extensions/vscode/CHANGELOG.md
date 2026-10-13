@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.76 - 2026-10-13
+
+### Fixed
+- Pressing the last-reply button before a chat has finished is no longer filed as an error report. The toast still explains to wait.
+
 ## 0.1.74 - 2026-10-06
 
 ### Changed

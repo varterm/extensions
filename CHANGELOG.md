@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.76 - 2026-10-13
+
+### Fixed
+- Pressing the last-reply button before a chat has finished is no longer filed as an error report. The toast still explains to wait; Sentry `b03370ea1c5d47f5b716f89d77b7c351` was that toast.
+
 ## 0.1.74 - 2026-10-06
 
 ### Changed
