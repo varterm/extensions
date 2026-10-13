@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.77 - 2026-10-13
+
+### Fixed
+- Expected empty states (no reply yet, Linux with no MP3 player) show as information, not a red error, and are not filed to Sentry.
+
 ## 0.1.76 - 2026-10-13
 
 ### Fixed

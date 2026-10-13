@@ -13,6 +13,7 @@ export const SKIP_MESSAGES = [
   'No text available to read aloud',
   'That text has nothing to read aloud',
   'Background playback currently uses macOS afplay',
+  'No audio player was found',
 ];
 
 /**

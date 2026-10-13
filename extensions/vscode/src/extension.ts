@@ -65,6 +65,21 @@ import {
   windowIsAgentsWindow,
 } from './auto-read';
 import { captureException, flushTelemetry, initTelemetry } from './telemetry';
+import { shouldReportError } from './telemetry-filter';
+
+function reportUserError(
+  error: unknown,
+  context: { area: string; label?: string; prefix?: string }
+): void {
+  const message = error instanceof Error ? error.message : 'Unexpected error';
+  const prefix = context.prefix || 'Varterm';
+  if (shouldReportError(error)) {
+    vscode.window.showErrorMessage(`${prefix}: ${message}`);
+    captureException(error, context);
+    return;
+  }
+  vscode.window.showInformationMessage(`${prefix}: ${message}`);
+}
 
 const SECRET_TOKEN_KEY = 'vartermCursor.apiToken';
 const SECRET_ELEVENLABS_KEY = 'vartermCursor.elevenLabsApiKey';
@@ -1069,9 +1084,7 @@ async function maybeAdvanceQueue(): Promise<void> {
     await startQueuedListen(extensionContext, next);
   } catch (error) {
     if (!isReadCancelled(error)) {
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Varterm queue: ${message}`);
-      captureException(error, { area: 'queue' });
+      reportUserError(error, { area: 'queue', prefix: 'Varterm queue' });
     }
   } finally {
     advancingQueue = false;
@@ -1355,9 +1368,7 @@ async function setAutoReadEnabled(
       if (isReadCancelled(error)) {
         throw error;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
-      captureException(error, { area: 'auto-read', label: 'agent reply' });
+      reportUserError(error, { area: 'auto-read', label: 'agent reply', prefix: 'Varterm auto-read' });
       throw error;
     });
   }, logInfo);
@@ -1402,9 +1413,7 @@ async function setAgentsWindowReading(context: vscode.ExtensionContext, enabled:
       if (isReadCancelled(error)) {
         throw error;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Varterm auto-read: ${message}`);
-      captureException(error, { area: 'auto-read', label: 'agent reply' });
+      reportUserError(error, { area: 'auto-read', label: 'agent reply', prefix: 'Varterm auto-read' });
       throw error;
     });
   }, logInfo);
@@ -1793,9 +1802,7 @@ async function jumpPlayback(delta: number): Promise<void> {
     try {
       await playTracksInCursor(extensionContext, latestPlayback.tracks, start);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Varterm: ${message}`);
-      captureException(error, { area: 'jump' });
+      reportUserError(error, { area: 'jump' });
     }
     return;
   }
@@ -2567,15 +2574,20 @@ async function readTextAloud(
     }
     const message = error instanceof Error ? error.message : String(error);
     logInfo(`readTextAloud error: ${message}`);
-    captureException(error, {
-      area: 'read',
-      label,
-      voice: spokenVoiceId,
-      script: dominantScript(normalized),
-    });
-    setPlaybackStatus('$(error) Varterm failed — click to retry', 'idle');
-    getOutputChannel().show(true);
-    playerProvider?.post({ type: 'error', label, message });
+    if (shouldReportError(error)) {
+      captureException(error, {
+        area: 'read',
+        label,
+        voice: spokenVoiceId,
+        script: dominantScript(normalized),
+      });
+      setPlaybackStatus('$(error) Varterm failed — click to retry', 'idle');
+      getOutputChannel().show(true);
+      playerProvider?.post({ type: 'error', label, message });
+    } else {
+      setIdleStatus();
+      playerProvider?.post({ type: 'notice', label, message });
+    }
     throw error;
   } finally {
     cts.dispose();
@@ -2804,9 +2816,7 @@ function handlePlayerMessage(context: vscode.ExtensionContext, message: Record<s
         if (isReadCancelled(error)) {
           return;
         }
-        const detail = error instanceof Error ? error.message : 'Unexpected error';
-        vscode.window.showErrorMessage(`Varterm: ${detail}`);
-        captureException(error, { area: 'player' });
+        reportUserError(error, { area: 'player' });
       }
     })();
   }, 0);
@@ -3125,9 +3135,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (isReadCancelled(error)) {
             return;
           }
-          const message = error instanceof Error ? error.message : 'Unexpected error';
-          vscode.window.showErrorMessage(`Varterm: ${message}`);
-          captureException(error, { area: 'command' });
+          reportUserError(error, { area: 'command' });
         }
       })
     );

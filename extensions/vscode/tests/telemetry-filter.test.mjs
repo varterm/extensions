@@ -39,6 +39,17 @@ test('an error with no status falls through to the message list', () => {
   assert.equal(shouldReportError(new Error('No audio to replay yet.')), false);
 });
 
+test('a Linux machine with no MP3 player is not reported', () => {
+  assert.equal(
+    shouldReportError(
+      new Error(
+        'No audio player was found. Varterm needs one of ffmpeg (ffplay), mpv, mpg123, VLC, or SoX on PATH to play sound on Linux. Installing ffmpeg is usually enough.'
+      )
+    ),
+    false
+  );
+});
+
 test('pressing play before a reply exists is not reported', () => {
   assert.equal(
     shouldReportError(new Error('This chat has no reply to read yet. Stay on this tab until the reply finishes.')),
